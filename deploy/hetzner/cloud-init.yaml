@@ -1,0 +1,15 @@
+#cloud-config
+# Paste into Hetzner's "Cloud config" field when creating a server.
+# The server bootstraps LibreChat unattended; progress is logged to
+# /var/log/librechat-bootstrap.log.
+#
+# Serves plain HTTP on the server's public IP. To get HTTPS instead, add
+# DOMAIN=... and ACME_EMAIL=... to the env below once DNS points here.
+runcmd:
+  - - bash
+    - -c
+    - >-
+      curl -fsSL
+      https://raw.githubusercontent.com/vendos-cz/LibreChat/main/deploy/hetzner/bootstrap.sh
+      -o /root/bootstrap.sh &&
+      bash /root/bootstrap.sh > /var/log/librechat-bootstrap.log 2>&1
