@@ -1,0 +1,24 @@
+{
+	# The default only applies in IP-only HTTP mode, where ACME never runs;
+	# an empty placeholder makes Caddy refuse to start. bootstrap.sh requires
+	# a real ACME_EMAIL whenever DOMAIN is set.
+	email {$ACME_EMAIL:admin@localhost}
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	request_body {
+		max_size 100MB
+	}
+
+	# flush_interval -1 disables response buffering, which streaming
+	# chat completions (SSE) require to arrive token by token.
+	reverse_proxy api:3080 {
+		flush_interval -1
+		header_up X-Real-IP {remote_host}
+	}
+}

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# One-shot bootstrap for LibreChat on a fresh Hetzner Cloud server (Ubuntu 24.04).
+#
+#   DOMAIN=chat.example.com ACME_EMAIL=you@example.com ./bootstrap.sh
+#
+# Re-running is safe: existing secrets in .env are preserved, images are
+# rebuilt from the current checkout, and the stack is restarted in place.
+set -euo pipefail
+
+REPO_URL="${REPO_URL:-https://github.com/vendos-cz/LibreChat.git}"
+BRANCH="${BRANCH:-main}"
+APP_DIR="${APP_DIR:-/opt/librechat}"
+DEPLOY_DIR="$APP_DIR/deploy/hetzner"
+DOMAIN="${DOMAIN:-}"
+ACME_EMAIL="${ACME_EMAIL:-}"
+SWAP_SIZE="${SWAP_SIZE:-4G}"
+
+log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "Run as root (or via sudo)."
+
+# On redeploy this script lives inside the checkout it is about to git-update.
+# Bash reads scripts incrementally, so rewriting the file mid-run can corrupt
+# execution — re-exec from a copy outside the repo first.
+SELF="$(readlink -f "$0" 2>/dev/null || true)"
+case "${BOOTSTRAP_REEXEC:-}:$SELF" in
+  1:*) ;;
+  *:"$APP_DIR"/*)
+    TMP_SELF="$(mktemp /tmp/librechat-bootstrap.XXXXXX)"
+    cp "$SELF" "$TMP_SELF"
+    export BOOTSTRAP_REEXEC=1
+    exec bash "$TMP_SELF" "$@"
+    ;;
+esac
+
+if [ -n "$DOMAIN" ] && [ -z "$ACME_EMAIL" ]; then
+  die "ACME_EMAIL is required when DOMAIN is set (Let's Encrypt needs it)."
+fi
+
+log "Installing base packages"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl git gnupg ufw ipset
+
+if ! command -v docker >/dev/null 2>&1; then
+  log "Installing Docker Engine"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+    "$(dpkg --print-architecture)" "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+    docker-buildx-plugin docker-compose-plugin
+  systemctl enable --now docker
+fi
+
+# The client bundle is built with esbuild/vite in-container; small Hetzner
+# plans (CX22/CX32) OOM during that step without swap.
+if ! swapon --show=NAME --noheadings | grep -q .; then
+  log "Creating ${SWAP_SIZE} swap file"
+  fallocate -l "$SWAP_SIZE" /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+log "Configuring firewall (22, 80, 443)"
+ufw allow 22/tcp >/dev/null
+ufw allow 80/tcp >/dev/null
+ufw allow 443/tcp >/dev/null
+ufw allow 443/udp >/dev/null
+ufw --force enable >/dev/null
+
+if [ -d "$APP_DIR/.git" ]; then
+  log "Updating checkout in $APP_DIR ($BRANCH)"
+  git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
+  git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+else
+  log "Cloning $REPO_URL ($BRANCH) into $APP_DIR"
+  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+fi
+
+cd "$DEPLOY_DIR"
+
+if [ ! -f librechat.yaml ]; then
+  log "Seeding librechat.yaml from librechat.example.yaml"
+  cp "$APP_DIR/librechat.example.yaml" librechat.yaml
+fi
+
+# set_env KEY VALUE — replaces an existing assignment (commented or not) or
+# appends the key. Values are written verbatim, so keep them shell-safe.
+set_env() {
+  local key="$1" value="$2"
+  if grep -qE "^#?${key}=" .env; then
+    sed -i -E "s|^#?${key}=.*|${key}=${value}|" .env
+  else
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+
+current_env() {
+  sed -nE "s/^$1=(.*)$/\1/p" .env | tail -n1
+}
+
+if [ ! -f .env ]; then
+  log "Generating .env from .env.example with fresh secrets"
+  cp "$APP_DIR/.env.example" .env
+  set_env CREDS_KEY "$(openssl rand -hex 32)"
+  set_env CREDS_IV "$(openssl rand -hex 16)"
+  set_env JWT_SECRET "$(openssl rand -hex 32)"
+  set_env JWT_REFRESH_SECRET "$(openssl rand -hex 32)"
+  set_env MEILI_MASTER_KEY "$(openssl rand -hex 32)"
+  set_env POSTGRES_PASSWORD "$(openssl rand -hex 24)"
+else
+  log "Reusing existing .env (secrets preserved)"
+fi
+
+# Never leave a generated deployment on the example placeholders.
+for key in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY; do
+  [ -n "$(current_env "$key")" ] || die "$key is empty in .env — set it before deploying."
+done
+
+if [ -n "$DOMAIN" ]; then
+  set_env DOMAIN_CLIENT "https://$DOMAIN"
+  set_env DOMAIN_SERVER "https://$DOMAIN"
+  set_env SITE_ADDRESS "$DOMAIN"
+  set_env ACME_EMAIL "$ACME_EMAIL"
+else
+  public_ip="$(curl -fsS --max-time 10 https://ipv4.icanhazip.com || echo localhost)"
+  set_env DOMAIN_CLIENT "http://$public_ip"
+  set_env DOMAIN_SERVER "http://$public_ip"
+  set_env SITE_ADDRESS ":80"
+  set_env ACME_EMAIL ""
+fi
+
+set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
+set_env BUILD_BRANCH "$BRANCH"
+set_env BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+chmod 600 .env
+
+log "Building and starting the stack (first build takes ~10-15 min)"
+docker compose pull --ignore-buildable --quiet
+docker compose up -d --build
+
+log "Waiting for the API to become healthy"
+for _ in $(seq 1 60); do
+  if docker compose exec -T api curl -fsS http://127.0.0.1:3080/health >/dev/null 2>&1; then
+    log "LibreChat is up"
+    echo "    $(current_env DOMAIN_CLIENT)"
+    echo "    Register the first account, then set ALLOW_REGISTRATION=false in $DEPLOY_DIR/.env"
+    exit 0
+  fi
+  sleep 5
+done
+
+die "API did not become healthy in time. Inspect: docker compose -f $DEPLOY_DIR/docker-compose.yml logs api"
