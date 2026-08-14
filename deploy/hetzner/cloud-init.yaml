@@ -12,4 +12,5 @@ runcmd:
       curl -fsSL
       https://raw.githubusercontent.com/vendos-cz/LibreChat/main/deploy/hetzner/bootstrap.sh
       -o /root/bootstrap.sh &&
-      bash /root/bootstrap.sh > /var/log/librechat-bootstrap.log 2>&1
+      SETUP_FIREWALL=1 bash /root/bootstrap.sh
+      > /var/log/librechat-bootstrap.log 2>&1
