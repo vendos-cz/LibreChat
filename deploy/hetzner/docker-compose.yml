@@ -1,0 +1,122 @@
+name: librechat
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.multi
+      target: api-build
+      args:
+        NODE_MAX_OLD_SPACE_SIZE: ${NODE_MAX_OLD_SPACE_SIZE:-4096}
+        BUILD_COMMIT: ${BUILD_COMMIT:-}
+        BUILD_BRANCH: ${BUILD_BRANCH:-}
+        BUILD_DATE: ${BUILD_DATE:-}
+    image: librechat-vendos:local
+    container_name: LibreChat-API
+    restart: always
+    depends_on:
+      - mongodb
+      - meilisearch
+      - rag_api
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3080
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - MEILI_HOST=http://meilisearch:7700
+      - LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp
+      - RAG_PORT=${RAG_PORT:-8000}
+      - RAG_API_URL=http://rag_api:${RAG_PORT:-8000}
+      - NO_PROXY=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,host.docker.internal
+      - no_proxy=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,host.docker.internal
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - librechat-images:/app/client/public/images
+      - librechat-uploads:/app/uploads
+      - librechat-logs:/app/api/logs
+      - librechat-data:/app/data
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: LibreChat-Caddy
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+      # Must never reach Caddy empty: a bare `email` directive is a parse
+      # error. The placeholder is unused in IP-only mode, where ACME is off.
+      - ACME_EMAIL=${ACME_EMAIL:-admin@localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  mongodb:
+    image: mongo:8.0.20
+    container_name: chat-mongodb
+    restart: always
+    command: mongod --noauth --bind_ip_all
+    volumes:
+      - mongo-data:/data/db
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.35.1
+    container_name: chat-meilisearch
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_ENV=production
+    volumes:
+      - meili-data:/meili_data
+
+  vectordb:
+    image: pgvector/pgvector:0.8.0-pg15-trixie
+    container_name: chat-vectordb
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mydatabase}
+      POSTGRES_USER: ${POSTGRES_USER:-myuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mypassword}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  rag_api:
+    image: registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest
+    container_name: chat-rag-api
+    restart: always
+    depends_on:
+      - vectordb
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=vectordb
+      - DB_PORT=5432
+      - RAG_PORT=${RAG_PORT:-8000}
+      # Pinned to the same values vectordb is created with; relying on the
+      # image defaults breaks as soon as POSTGRES_PASSWORD is randomized.
+      - POSTGRES_DB=${POSTGRES_DB:-mydatabase}
+      - POSTGRES_USER=${POSTGRES_USER:-myuser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mypassword}
+
+volumes:
+  mongo-data:
+  meili-data:
+  pgdata:
+  caddy-data:
+  caddy-config:
+  librechat-data:
+  librechat-images:
+  librechat-uploads:
+  librechat-logs:
