@@ -68,6 +68,31 @@ public IP — fine for a smoke test, not for real use.
 3. Add the provider API keys you need (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …)
    to `.env` and re-run `docker compose up -d api`.
 
+## Behind an existing reverse proxy
+
+If the server already runs a proxy on 80/443, set `PROXY_NETWORK` to one of that
+proxy's docker networks. LibreChat then starts without its own Caddy and joins
+that network, keeping its default network for outbound access:
+
+```bash
+PROXY_NETWORK=mystack_internal DOMAIN=chat.example.com ./bootstrap.sh
+```
+
+`ACME_EMAIL` is not needed — the existing proxy owns certificates. Nothing
+routes to LibreChat until that proxy is told to; for Caddy, add:
+
+```
+chat.example.com {
+    reverse_proxy LibreChat-API:3080 {
+        flush_interval -1
+    }
+}
+```
+
+then `docker exec <proxy> caddy reload --config /etc/caddy/Caddyfile`. The
+`flush_interval -1` matters as much here as in the bundled Caddyfile: without
+it the proxy buffers responses and streamed replies arrive in one lump.
+
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the

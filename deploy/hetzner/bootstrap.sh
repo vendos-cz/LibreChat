@@ -19,6 +19,19 @@ SWAP_SIZE="${SWAP_SIZE:-4G}"
 # them off, so ufw is only switched on for a server dedicated to LibreChat.
 # Rules are always added; SETUP_FIREWALL=1 is what actually enables ufw.
 SETUP_FIREWALL="${SETUP_FIREWALL:-0}"
+# Set to an existing docker network to run behind a reverse proxy that already
+# owns ports 80/443. LibreChat then starts without its own Caddy and joins that
+# network, and the proxy is expected to route a hostname to LibreChat-API:3080.
+PROXY_NETWORK="${PROXY_NETWORK:-}"
+
+compose() {
+  if [ -n "$PROXY_NETWORK" ]; then
+    PROXY_NETWORK="$PROXY_NETWORK" docker compose \
+      -f docker-compose.yml -f docker-compose.proxy.yml "$@"
+  else
+    docker compose --profile edge -f docker-compose.yml "$@"
+  fi
+}
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -39,7 +52,9 @@ case "${BOOTSTRAP_REEXEC:-}:$SELF" in
     ;;
 esac
 
-if [ -n "$DOMAIN" ] && [ -z "$ACME_EMAIL" ]; then
+# Only our own Caddy needs an ACME contact; behind an external proxy that
+# proxy already owns certificate issuance.
+if [ -n "$DOMAIN" ] && [ -z "$ACME_EMAIL" ] && [ -z "${PROXY_NETWORK:-}" ]; then
   die "ACME_EMAIL is required when DOMAIN is set (Let's Encrypt needs it)."
 fi
 
@@ -162,31 +177,50 @@ port_listener() {
 
 # Caddy binds 80/443 on the host. If something unrelated already holds them,
 # abort before touching it rather than fighting over the port. Skipped once our
-# own stack owns them, so redeploys are unaffected.
-if [ -z "$(docker compose ps -q caddy 2>/dev/null)" ]; then
+# own stack owns them, and irrelevant behind an external proxy.
+if [ -z "$PROXY_NETWORK" ] && [ -z "$(compose ps -q caddy 2>/dev/null)" ]; then
   for port in 80 443; do
     listener="$(port_listener "$port")"
     [ -n "$listener" ] || continue
     die "Port $port is already in use on this server:
     $listener
-  LibreChat's Caddy needs 80 and 443. Free the port, or deploy LibreChat on a
-  separate server (see deploy/hetzner/cloud-init.yaml)."
+  LibreChat's Caddy needs 80 and 443. Free the port, set PROXY_NETWORK to run
+  behind that proxy, or deploy on a separate server (see cloud-init.yaml)."
   done
 fi
 
+if [ -n "$PROXY_NETWORK" ]; then
+  docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1 \
+    || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network."
+  log "Running behind an external proxy on network $PROXY_NETWORK (no own Caddy)"
+fi
+
 log "Building and starting the stack (first build takes ~10-15 min)"
-docker compose pull --ignore-buildable --quiet
-docker compose up -d --build
+compose pull --ignore-buildable --quiet
+compose up -d --build
 
 log "Waiting for the API to become healthy"
 for _ in $(seq 1 60); do
-  if docker compose exec -T api curl -fsS http://127.0.0.1:3080/health >/dev/null 2>&1; then
+  if compose exec -T api curl -fsS http://127.0.0.1:3080/health >/dev/null 2>&1; then
     log "LibreChat is up"
     echo "    $(current_env DOMAIN_CLIENT)"
     echo "    Register the first account, then set ALLOW_REGISTRATION=false in $DEPLOY_DIR/.env"
+    if [ -n "$PROXY_NETWORK" ]; then
+      cat <<SNIPPET
+
+  LibreChat is reachable from $PROXY_NETWORK but nothing routes to it yet.
+  Add this to the proxy's Caddyfile and reload it:
+
+      ${DOMAIN:-chat.example.com} {
+          reverse_proxy LibreChat-API:3080 {
+              flush_interval -1
+          }
+      }
+SNIPPET
+    fi
     exit 0
   fi
   sleep 5
 done
 
-die "API did not become healthy in time. Inspect: docker compose -f $DEPLOY_DIR/docker-compose.yml logs api"
+die "API did not become healthy in time. Inspect: cd $DEPLOY_DIR && docker compose logs api"

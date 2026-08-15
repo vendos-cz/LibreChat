@@ -7,6 +7,14 @@ on:
         description: 'Branch the server should check out and build'
         required: false
         default: ''
+      proxy_network:
+        description: 'Existing docker network of a reverse proxy to run behind (empty = LibreChat owns ports 80/443)'
+        required: false
+        default: ''
+      domain:
+        description: 'Hostname LibreChat is served on (overrides the HETZNER_DOMAIN secret)'
+        required: false
+        default: ''
 
 concurrency:
   group: deploy-hetzner
@@ -33,16 +41,15 @@ jobs:
           HOST: ${{ secrets.HETZNER_HOST }}
           USER_NAME: ${{ secrets.HETZNER_USER }}
           PORT: ${{ secrets.HETZNER_SSH_PORT }}
-          DOMAIN: ${{ secrets.HETZNER_DOMAIN }}
+          DOMAIN: ${{ inputs.domain || secrets.HETZNER_DOMAIN }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          PROXY_NETWORK: ${{ vars.HETZNER_PROXY_NETWORK }}
-          APP_PORT: ${{ vars.HETZNER_APP_PORT }}
+          PROXY_NETWORK: ${{ inputs.proxy_network || vars.HETZNER_PROXY_NETWORK }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
             "${USER_NAME:-root}@$HOST" \
             "DOMAIN='$DOMAIN' ACME_EMAIL='$ACME_EMAIL' BRANCH='$DEPLOY_BRANCH' \
              REPO_URL='$REPO_URL' PROXY_NETWORK='$PROXY_NETWORK' \
-             APP_PORT='$APP_PORT' bash -s" < deploy/hetzner/bootstrap.sh
+             bash -s" < deploy/hetzner/bootstrap.sh
