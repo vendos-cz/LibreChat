@@ -15,6 +15,12 @@ on:
         description: 'Hostname LibreChat is served on (overrides the HETZNER_DOMAIN secret)'
         required: false
         default: ''
+      allow_registration:
+        description: 'Open or close self-registration (leave unset to keep the current setting)'
+        required: false
+        default: ''
+        type: choice
+        options: ['', 'true', 'false']
 
 concurrency:
   group: deploy-hetzner
@@ -46,10 +52,18 @@ jobs:
           DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           PROXY_NETWORK: ${{ inputs.proxy_network || vars.HETZNER_PROXY_NETWORK }}
+          ALLOW_REGISTRATION: ${{ inputs.allow_registration }}
+          # Optional: set these secrets to manage provider keys from here
+          # instead of editing .env on the server. Unset ones are left alone.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
             "${USER_NAME:-root}@$HOST" \
             "DOMAIN='$DOMAIN' ACME_EMAIL='$ACME_EMAIL' BRANCH='$DEPLOY_BRANCH' \
              REPO_URL='$REPO_URL' PROXY_NETWORK='$PROXY_NETWORK' \
+             ALLOW_REGISTRATION='$ALLOW_REGISTRATION' \
+             ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' \
+             OPENAI_API_KEY='$OPENAI_API_KEY' \
              bash -s" < deploy/hetzner/bootstrap.sh
