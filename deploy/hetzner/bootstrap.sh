@@ -191,6 +191,15 @@ fi
 for override in ALLOW_REGISTRATION ANTHROPIC_API_KEY OPENAI_API_KEY; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
+  # An absent secret and an empty one are indistinguishable here, so empty has
+  # to mean "leave alone". The literal "unset" is how a wrong value gets
+  # cleared — otherwise a mistyped key would stay on the server for good,
+  # leaving its endpoint advertised as configured while every call fails.
+  if [ "$override_value" = "unset" ]; then
+    set_env "$override" ""
+    log "Cleared $override"
+    continue
+  fi
   set_env "$override" "$override_value"
   log "Applied $override from the deploy environment"
 done

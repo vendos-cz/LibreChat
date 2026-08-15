@@ -122,6 +122,7 @@ pull the file out from under the running shell.)
 | `HETZNER_SSH_KEY` | yes | Private key whose public half is in the server's `authorized_keys` |
 | `HETZNER_USER` | no | Defaults to `root` |
 | `HETZNER_SSH_PORT` | no | Defaults to `22` |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | no | Written to the server's `.env` when set. Use the literal `unset` to clear a wrong one — an empty secret means "leave alone" |
 | `HETZNER_DOMAIN` | no | Omit to serve plain HTTP |
 | `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact |
 
