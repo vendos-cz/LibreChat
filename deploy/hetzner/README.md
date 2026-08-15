@@ -93,6 +93,11 @@ then `docker exec <proxy> caddy reload --config /etc/caddy/Caddyfile`. The
 `flush_interval -1` matters as much here as in the bundled Caddyfile: without
 it the proxy buffers responses and streamed replies arrive in one lump.
 
+`bootstrap.sh` records the chosen mode in `.env` as `COMPOSE_FILE` and
+`COMPOSE_PROFILES`, so the plain `docker compose` commands below pick up the
+overlay by themselves — no `-f` juggling, and no risk of a manual `up -d`
+quietly detaching the api container from the proxy network.
+
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the
