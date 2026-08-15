@@ -15,6 +15,10 @@ DEPLOY_DIR="$APP_DIR/deploy/hetzner"
 DOMAIN="${DOMAIN:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 SWAP_SIZE="${SWAP_SIZE:-4G}"
+# Enabling a firewall on a server that already runs other services can cut
+# them off, so ufw is only switched on for a server dedicated to LibreChat.
+# Rules are always added; SETUP_FIREWALL=1 is what actually enables ufw.
+SETUP_FIREWALL="${SETUP_FIREWALL:-0}"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -42,7 +46,7 @@ fi
 log "Installing base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git gnupg ufw ipset
+apt-get install -y -qq ca-certificates curl git gnupg ufw ipset iproute2
 
 if ! command -v docker >/dev/null 2>&1; then
   log "Installing Docker Engine"
@@ -70,12 +74,20 @@ if ! swapon --show=NAME --noheadings | grep -q .; then
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-log "Configuring firewall (22, 80, 443)"
+log "Adding firewall rules (22, 80, 443)"
 ufw allow 22/tcp >/dev/null
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw allow 443/udp >/dev/null
-ufw --force enable >/dev/null
+
+if ufw status 2>/dev/null | grep -q '^Status: active'; then
+  log "ufw already active — rules applied"
+elif [ "$SETUP_FIREWALL" = "1" ]; then
+  log "Enabling ufw"
+  ufw --force enable >/dev/null
+else
+  log "ufw left inactive (pass SETUP_FIREWALL=1 to enable it)"
+fi
 
 if [ -d "$APP_DIR/.git" ]; then
   log "Updating checkout in $APP_DIR ($BRANCH)"
@@ -143,6 +155,24 @@ set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
 set_env BUILD_BRANCH "$BRANCH"
 set_env BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 chmod 600 .env
+
+port_listener() {
+  ss -ltnpH "( sport = :$1 )" 2>/dev/null | tr -s ' '
+}
+
+# Caddy binds 80/443 on the host. If something unrelated already holds them,
+# abort before touching it rather than fighting over the port. Skipped once our
+# own stack owns them, so redeploys are unaffected.
+if [ -z "$(docker compose ps -q caddy 2>/dev/null)" ]; then
+  for port in 80 443; do
+    listener="$(port_listener "$port")"
+    [ -n "$listener" ] || continue
+    die "Port $port is already in use on this server:
+    $listener
+  LibreChat's Caddy needs 80 and 443. Free the port, or deploy LibreChat on a
+  separate server (see deploy/hetzner/cloud-init.yaml)."
+  done
+fi
 
 log "Building and starting the stack (first build takes ~10-15 min)"
 docker compose pull --ignore-buildable --quiet

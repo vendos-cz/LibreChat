@@ -1,0 +1,43 @@
+name: Inspect Hetzner server
+
+# Read-only reconnaissance: what is running, what holds the web ports, and
+# whether a reverse proxy is present that LibreChat could sit behind.
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/hetzner-ssh
+        with:
+          ssh_key: ${{ secrets.HETZNER_SSH_KEY }}
+          host: ${{ secrets.HETZNER_HOST }}
+          port: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+          user: ${{ secrets.HETZNER_USER || 'root' }}
+
+      - name: Inspect
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER_NAME: ${{ secrets.HETZNER_USER }}
+          PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" -o BatchMode=yes \
+            "${USER_NAME:-root}@$HOST" 'bash -s' <<'REMOTE'
+          set -u
+          echo "=== host ==="
+          hostnamectl 2>/dev/null | sed -n '1,3p'; echo; free -h | head -2; df -h / | tail -1
+          echo; echo "=== containers ==="
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' 2>&1
+          echo; echo "=== compose projects ==="
+          docker ps --format '{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | sort -u
+          echo; echo "=== listeners on 80/443 ==="
+          ss -ltnp "( sport = :80 or sport = :443 )" 2>/dev/null
+          echo; echo "=== reverse proxy? ==="
+          docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+            | grep -iE 'caddy|traefik|nginx|haproxy|swag|npm|proxy' || echo "none matched by image name"
+          echo; echo "=== docker networks ==="
+          docker network ls --format '{{.Name}}\t{{.Driver}}' 2>/dev/null
+          REMOTE

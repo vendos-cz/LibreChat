@@ -39,9 +39,19 @@ chmod +x bootstrap.sh
 DOMAIN=chat.example.com ACME_EMAIL=you@example.com BRANCH=main ./bootstrap.sh
 ```
 
-The first run installs Docker, configures `ufw` (22/80/443), clones the repo to
-`/opt/librechat`, generates `.env` with fresh secrets, then builds and starts
-the stack. Expect **10–15 minutes** for the initial build.
+The first run installs Docker, adds firewall rules for 22/80/443, clones the
+repo to `/opt/librechat`, generates `.env` with fresh secrets, then builds and
+starts the stack. Expect **10–15 minutes** for the initial build.
+
+Two safeguards apply when the server is not dedicated to LibreChat:
+
+- **`ufw` is not switched on** unless you pass `SETUP_FIREWALL=1`. The allow
+  rules are always added, but enabling a firewall on a server already running
+  other services can cut them off. If `ufw` is already active, rules are simply
+  applied.
+- **Ports 80 and 443 are checked before the stack starts.** Caddy needs both; if
+  anything else holds them, the script aborts and names the process instead of
+  fighting over the port. Redeploys skip this check once Caddy owns the ports.
 
 Without `DOMAIN` the stack serves plain HTTP on port 80 using the server's
 public IP — fine for a smoke test, not for real use.
