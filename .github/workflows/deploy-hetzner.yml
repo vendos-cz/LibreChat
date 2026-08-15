@@ -18,47 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify required secrets
-        env:
-          HOST: ${{ secrets.HETZNER_HOST }}
-          KEY: ${{ secrets.HETZNER_SSH_KEY }}
-        run: |
-          [ -n "$HOST" ] || { echo "::error::HETZNER_HOST secret is not set"; exit 1; }
-          [ -n "$KEY" ] || { echo "::error::HETZNER_SSH_KEY secret is not set"; exit 1; }
-
-      - name: Configure SSH
-        env:
-          SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
-          HOST: ${{ secrets.HETZNER_HOST }}
-          PORT: ${{ secrets.HETZNER_SSH_PORT }}
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
-          # A key pasted from Windows carries CRLF, which OpenSSH rejects.
-          sed -i 's/\r$//' ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-
-          # Turn the three ways this secret is usually wrong into named errors
-          # instead of an opaque "Permission denied (publickey)".
-          if grep -q '^ssh-' ~/.ssh/id_deploy; then
-            echo "::error::HETZNER_SSH_KEY contains a PUBLIC key. It needs the PRIVATE key — the file without the .pub suffix."
-            exit 1
-          fi
-          if ! grep -q 'BEGIN .*PRIVATE KEY' ~/.ssh/id_deploy; then
-            echo "::error::HETZNER_SSH_KEY is not a private key. Paste the whole file, including the BEGIN and END lines."
-            exit 1
-          fi
-          if ! ssh-keygen -y -P '' -f ~/.ssh/id_deploy > ~/.ssh/id_deploy.pub 2>/tmp/keyerr; then
-            echo "::error::Could not read HETZNER_SSH_KEY — it is most likely protected by a passphrase, which cannot work unattended. Generate a passphrase-less key for CI. Details: $(cat /tmp/keyerr)"
-            exit 1
-          fi
-
-          echo "Deploy key fingerprint: $(ssh-keygen -lf ~/.ssh/id_deploy.pub)"
-          echo "This key's public half — it must be present in the server's ~/.ssh/authorized_keys:"
-          cat ~/.ssh/id_deploy.pub
-
-          ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+      - uses: ./.github/actions/hetzner-ssh
+        with:
+          ssh_key: ${{ secrets.HETZNER_SSH_KEY }}
+          host: ${{ secrets.HETZNER_HOST }}
+          port: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+          user: ${{ secrets.HETZNER_USER || 'root' }}
 
       # bootstrap.sh is idempotent: it installs missing prerequisites, updates
       # the server's checkout to $BRANCH, preserves the existing .env, then
@@ -72,17 +37,12 @@ jobs:
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          PROXY_NETWORK: ${{ vars.HETZNER_PROXY_NETWORK }}
+          APP_PORT: ${{ vars.HETZNER_APP_PORT }}
         run: |
-          if ! ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
-            -o BatchMode=yes -o ConnectTimeout=15 \
-            "${USER_NAME:-root}@$HOST" true 2>/tmp/sshtest; then
-            cat /tmp/sshtest
-            echo "::error::SSH to ${USER_NAME:-root}@server was refused. The deploy key's public half (printed above) is not in that user's ~/.ssh/authorized_keys on the server."
-            exit 1
-          fi
-
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
             "${USER_NAME:-root}@$HOST" \
             "DOMAIN='$DOMAIN' ACME_EMAIL='$ACME_EMAIL' BRANCH='$DEPLOY_BRANCH' \
-             REPO_URL='$REPO_URL' bash -s" < deploy/hetzner/bootstrap.sh
+             REPO_URL='$REPO_URL' PROXY_NETWORK='$PROXY_NETWORK' \
+             APP_PORT='$APP_PORT' bash -s" < deploy/hetzner/bootstrap.sh
