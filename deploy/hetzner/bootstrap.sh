@@ -172,6 +172,19 @@ else
   set_env ACME_EMAIL ""
 fi
 
+# Persist the mode so a bare `docker compose` in this directory behaves like
+# the deploy does. Without it a manual `up -d` either fails with "network
+# declared as external, but could not be found" or silently drops the api
+# container off the proxy network.
+set_env PROXY_NETWORK "$PROXY_NETWORK"
+if [ -n "$PROXY_NETWORK" ]; then
+  set_env COMPOSE_FILE "docker-compose.yml:docker-compose.proxy.yml"
+  set_env COMPOSE_PROFILES ""
+else
+  set_env COMPOSE_FILE "docker-compose.yml"
+  set_env COMPOSE_PROFILES "edge"
+fi
+
 set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
 set_env BUILD_BRANCH "$BRANCH"
 set_env BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
