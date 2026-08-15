@@ -206,6 +206,15 @@ for _ in $(seq 1 60); do
     echo "    $(current_env DOMAIN_CLIENT)"
     echo "    Register the first account, then set ALLOW_REGISTRATION=false in $DEPLOY_DIR/.env"
     if [ -n "$PROXY_NETWORK" ]; then
+      # Joining a second network can change which one provides the default
+      # route. Losing egress here would look like "LibreChat runs but every
+      # model call fails", so say it plainly instead.
+      if ! compose exec -T api curl -fsS --max-time 15 -o /dev/null \
+           https://cloudflare.com/cdn-cgi/trace 2>/dev/null; then
+        printf '\n\033[1;31mWARNING: the api container has no outbound internet access.\033[0m\n'
+        printf '  Attaching to %s appears to have taken over its default route.\n' "$PROXY_NETWORK"
+        printf '  Model providers will be unreachable until this is fixed.\n'
+      fi
       cat <<SNIPPET
 
   LibreChat is reachable from $PROXY_NETWORK but nothing routes to it yet.
