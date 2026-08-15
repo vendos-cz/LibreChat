@@ -185,6 +185,16 @@ else
   set_env COMPOSE_PROFILES "edge"
 fi
 
+# Settings worth changing after the first deploy, without hand-editing .env on
+# the server. Each is applied only when given, so an unset one keeps its
+# current value rather than reverting to the example default.
+for override in ALLOW_REGISTRATION ANTHROPIC_API_KEY OPENAI_API_KEY; do
+  eval "override_value=\${$override:-}"
+  [ -n "$override_value" ] || continue
+  set_env "$override" "$override_value"
+  log "Applied $override from the deploy environment"
+done
+
 set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
 set_env BUILD_BRANCH "$BRANCH"
 set_env BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
