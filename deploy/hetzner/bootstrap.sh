@@ -106,8 +106,14 @@ fi
 
 if [ -d "$APP_DIR/.git" ]; then
   log "Updating checkout in $APP_DIR ($BRANCH)"
-  git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
-  git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+  # The clone is shallow and single-branch, so its fetch refspec only covers
+  # the branch first deployed. Name the refspec explicitly, otherwise deploying
+  # any other branch fails with "origin/<branch> is not a commit".
+  # reset --hard leaves untracked and ignored files alone, so .env survives.
+  git -C "$APP_DIR" fetch --depth 1 origin \
+    "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  git -C "$APP_DIR" reset -q --hard
+  git -C "$APP_DIR" checkout -q -B "$BRANCH" "refs/remotes/origin/$BRANCH"
 else
   log "Cloning $REPO_URL ($BRANCH) into $APP_DIR"
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
