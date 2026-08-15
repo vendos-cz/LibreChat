@@ -43,6 +43,9 @@ services:
   caddy:
     image: caddy:2.10-alpine
     container_name: LibreChat-Caddy
+    # Only started when LibreChat owns the host's web ports. Behind an existing
+    # reverse proxy the edge profile stays off and that proxy terminates TLS.
+    profiles: [edge]
     restart: always
     depends_on:
       - api

@@ -1,0 +1,14 @@
+# Overlay for running behind a reverse proxy that already owns ports 80/443.
+# Applied by bootstrap.sh when PROXY_NETWORK is set. The api container joins
+# that proxy's network in addition to its own, so the proxy can reach it by
+# name while LibreChat keeps outbound access over its default network.
+services:
+  api:
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK}
