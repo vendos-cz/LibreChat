@@ -125,6 +125,29 @@ pull the file out from under the running shell.)
 | `HETZNER_DOMAIN` | no | Omit to serve plain HTTP |
 | `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact |
 
+Settings the deploy can push into the server's `.env`, so they need no
+hand-editing over SSH. Each is applied only when set; an unset one leaves the
+current value alone.
+
+| Secret | Notes |
+|---|---|
+| `ANTHROPIC_API_KEY` | Provider key |
+| `OPENAI_API_KEY` | Provider key |
+| `GOOGLE_CLIENT_ID` | Google OAuth client for social sign-in |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+
+| Variable | Notes |
+|---|---|
+| `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
+| `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
+
+Google's redirect URI is `${DOMAIN_SERVER}${GOOGLE_CALLBACK_URL}`, i.e.
+`https://chat.example.com/oauth/google/callback` with the default
+`GOOGLE_CALLBACK_URL`. Register exactly that in the Google client; no JavaScript
+origins are needed. The admin panel signs in through a separately hard-coded
+`/api/admin/oauth/google/callback`, so using that flow means adding a second
+redirect URI.
+
 ## Operations
 
 ```bash

@@ -53,10 +53,17 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           PROXY_NETWORK: ${{ inputs.proxy_network || vars.HETZNER_PROXY_NETWORK }}
           ALLOW_REGISTRATION: ${{ inputs.allow_registration }}
-          # Optional: set these secrets to manage provider keys from here
-          # instead of editing .env on the server. Unset ones are left alone.
+          # Optional: set these secrets to manage provider keys and Google
+          # OAuth credentials from here instead of editing .env on the server.
+          # Unset ones are left alone.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          # Credentials alone do not surface the Google button — .env.example
+          # ships both flags off. Set them as repository variables to enable it.
+          ALLOW_SOCIAL_LOGIN: ${{ vars.ALLOW_SOCIAL_LOGIN }}
+          ALLOW_SOCIAL_REGISTRATION: ${{ vars.ALLOW_SOCIAL_REGISTRATION }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
@@ -66,4 +73,8 @@ jobs:
              ALLOW_REGISTRATION='$ALLOW_REGISTRATION' \
              ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' \
+             GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
+             GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
+             ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
+             ALLOW_SOCIAL_REGISTRATION='$ALLOW_SOCIAL_REGISTRATION' \
              bash -s" < deploy/hetzner/bootstrap.sh
