@@ -260,7 +260,8 @@ fi
 # the server. Each is applied only when given, so an unset one keeps its
 # current value rather than reverting to the example default.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
-                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ANTHROPIC_API_KEY OPENAI_API_KEY; do
+                ANTHROPIC_API_KEY OPENAI_API_KEY \
+                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
   set_env "$override" "$override_value"

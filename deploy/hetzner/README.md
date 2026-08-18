@@ -82,9 +82,9 @@ Services**:
   Google Workspace domain. Only accounts in that Workspace can then reach the
   client at all, and no app verification is needed.
 - **Credentials → Create credentials → OAuth client ID → Web application** —
-  authorized redirect URI `https://<your-domain>/oauth/google/callback`, which
-  is `DOMAIN_SERVER` plus `GOOGLE_CALLBACK_URL` from `.env`. It must match
-  exactly, scheme included.
+  authorized redirect URI `https://<your-domain>/oauth/google/callback`, matched
+  exactly, scheme included. See the Actions section below for how that URI is
+  derived and when a second one is needed.
 
 Google refuses redirect URIs on domains whose ownership cannot be verified, so a
 placeholder hostname such as `sslip.io` will not do here — use a host under a
@@ -171,8 +171,6 @@ pull the file out from under the running shell.)
 | `HETZNER_SSH_PORT` | no | Defaults to `22` |
 | `HETZNER_DOMAIN` | no | Omit to serve plain HTTP |
 | `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | Google OAuth client; unset leaves `.env` alone |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | no | Provider keys; unset leaves `.env` alone |
 
 What changes per run — `branch`, `domain`, `proxy_network`,
 `allow_registration`, `allow_social_login`, `allow_social_registration`,
@@ -180,6 +178,29 @@ What changes per run — `branch`, `domain`, `proxy_network`,
 an empty one keeps what the server already has. `allowed_email_domains` also
 falls back to the `ALLOWED_EMAIL_DOMAINS` repository variable, which is where to
 keep it so every deploy reasserts the same allowlist.
+
+Settings the deploy can push into the server's `.env`, so they need no
+hand-editing over SSH. Each is applied only when set; an unset one leaves the
+current value alone.
+
+| Secret | Notes |
+|---|---|
+| `ANTHROPIC_API_KEY` | Provider key |
+| `OPENAI_API_KEY` | Provider key |
+| `GOOGLE_CLIENT_ID` | Google OAuth client for social sign-in |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+
+| Variable | Notes |
+|---|---|
+| `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
+| `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
+
+Google's redirect URI is `${DOMAIN_SERVER}${GOOGLE_CALLBACK_URL}`, i.e.
+`https://chat.example.com/oauth/google/callback` with the default
+`GOOGLE_CALLBACK_URL`. Register exactly that in the Google client; no JavaScript
+origins are needed. The admin panel signs in through a separately hard-coded
+`/api/admin/oauth/google/callback`, so using that flow means adding a second
+redirect URI.
 
 ## Operations
 
