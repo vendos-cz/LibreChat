@@ -214,10 +214,18 @@ port_listener() {
   ss -ltnpH "( sport = :$1 )" 2>/dev/null | tr -s ' '
 }
 
-# Both failures below are answered by picking a network, so name the choices
-# instead of making the reader open a shell on the server to list them.
-available_networks() {
-  docker network ls --format '{{.Name}}' 2>/dev/null | sort | tr '\n' ' '
+# Both failures below are answered by picking a network. A bare list rarely
+# identifies which one, so name the two facts that do: the networks the api
+# container already shares with the proxy, and who holds the port.
+network_hints() {
+  printf 'networks: %s' \
+    "$(docker network ls --format '{{.Name}}' 2>/dev/null | sort | tr '\n' ' ')"
+  printf '\n  LibreChat-API is on: %s' \
+    "$(docker inspect LibreChat-API \
+       --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+       2>/dev/null)"
+  printf '\n  publishing port 80: %s' \
+    "$(docker ps --filter publish=80 --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
 }
 
 # Caddy binds 80/443 on the host. If something unrelated already holds them,
@@ -231,14 +239,14 @@ if [ -z "$PROXY_NETWORK" ] && [ -z "$(compose ps -q caddy 2>/dev/null)" ]; then
     $listener
   LibreChat's Caddy needs 80 and 443. Free the port, set PROXY_NETWORK to run
   behind that proxy, or deploy on a separate server (see cloud-init.yaml).
-  Networks on this server: $(available_networks)"
+  This server's $(network_hints)"
   done
 fi
 
 if [ -n "$PROXY_NETWORK" ]; then
   docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1 \
     || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network.
-  Networks on this server: $(available_networks)"
+  This server's $(network_hints)"
   log "Running behind an external proxy on network $PROXY_NETWORK (no own Caddy)"
 fi
 
