@@ -172,6 +172,14 @@ else
   set_env ACME_EMAIL ""
 fi
 
+# An unset PROXY_NETWORK means "keep the current mode", like every other
+# override below. Treating it as "switch to edge" made a deploy that simply
+# did not pass the value tear a proxy-mode server off its proxy and then
+# collide with it on port 80.
+if [ -z "$PROXY_NETWORK" ]; then
+  PROXY_NETWORK="$(current_env PROXY_NETWORK)"
+fi
+
 # Persist the mode so a bare `docker compose` in this directory behaves like
 # the deploy does. Without it a manual `up -d` either fails with "network
 # declared as external, but could not be found" or silently drops the api
@@ -206,6 +214,12 @@ port_listener() {
   ss -ltnpH "( sport = :$1 )" 2>/dev/null | tr -s ' '
 }
 
+# Both failures below are answered by picking a network, so name the choices
+# instead of making the reader open a shell on the server to list them.
+available_networks() {
+  docker network ls --format '{{.Name}}' 2>/dev/null | sort | tr '\n' ' '
+}
+
 # Caddy binds 80/443 on the host. If something unrelated already holds them,
 # abort before touching it rather than fighting over the port. Skipped once our
 # own stack owns them, and irrelevant behind an external proxy.
@@ -216,13 +230,15 @@ if [ -z "$PROXY_NETWORK" ] && [ -z "$(compose ps -q caddy 2>/dev/null)" ]; then
     die "Port $port is already in use on this server:
     $listener
   LibreChat's Caddy needs 80 and 443. Free the port, set PROXY_NETWORK to run
-  behind that proxy, or deploy on a separate server (see cloud-init.yaml)."
+  behind that proxy, or deploy on a separate server (see cloud-init.yaml).
+  Networks on this server: $(available_networks)"
   done
 fi
 
 if [ -n "$PROXY_NETWORK" ]; then
   docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1 \
-    || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network."
+    || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network.
+  Networks on this server: $(available_networks)"
   log "Running behind an external proxy on network $PROXY_NETWORK (no own Caddy)"
 fi
 

@@ -98,6 +98,11 @@ it the proxy buffers responses and streamed replies arrive in one lump.
 overlay by themselves — no `-f` juggling, and no risk of a manual `up -d`
 quietly detaching the api container from the proxy network.
 
+An unset `PROXY_NETWORK` keeps whatever mode `.env` already records, so a
+redeploy that does not pass it cannot tear a proxy-mode server off its proxy.
+Moving back to LibreChat's own Caddy is therefore deliberate: clear
+`PROXY_NETWORK` in `.env` on the server first, then redeploy.
+
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the
