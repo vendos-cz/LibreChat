@@ -49,6 +49,7 @@ const mockRedirectToAuthFailure = jest.fn((res, { clientDomain, authFailedError 
   res.redirect(`${clientDomain}/login?redirect=false&error=${authFailedError}`),
 );
 const mockPassportAuthenticate = jest.fn(() => (_req, _res, next) => next());
+const mockGetAppConfig = jest.fn(() => Promise.resolve({}));
 
 jest.mock('passport', () => ({
   authenticate: (...args) => mockPassportAuthenticate(...args),
@@ -93,7 +94,7 @@ jest.mock('~/models', () => ({
 }));
 
 jest.mock('~/server/services/Config', () => ({
-  getAppConfig: jest.fn(),
+  getAppConfig: (...args) => mockGetAppConfig(...args),
 }));
 
 afterAll(() => {
@@ -187,5 +188,75 @@ describe('OAuth route failure logging', () => {
       }),
     );
     expect(JSON.stringify(mockLogger.warn.mock.calls[0])).not.toContain('Unknown OAuth error');
+  });
+});
+
+describe('Google hosted domain hint', () => {
+  const googleAuthOptions = () =>
+    mockPassportAuthenticate.mock.calls
+      .filter(([provider, options]) => provider === 'google' && options?.failureRedirect == null)
+      .pop()?.[1];
+
+  beforeEach(() => {
+    mockLogger.error.mockClear();
+    mockPassportAuthenticate.mockClear();
+    mockPassportAuthenticate.mockImplementation(() => (_req, res) => res.status(204).end());
+    mockGetAppConfig.mockReset();
+    mockGetAppConfig.mockResolvedValue({});
+  });
+
+  it('sends hd when a single email domain is allowed', async () => {
+    mockGetAppConfig.mockResolvedValue({ registration: { allowedDomains: ['nasdum.cz'] } });
+    const app = createApp();
+
+    await request(app).get('/oauth/google').expect(204);
+
+    expect(mockGetAppConfig).toHaveBeenCalledWith({ baseOnly: true });
+    expect(googleAuthOptions()).toEqual({
+      scope: ['openid', 'profile', 'email'],
+      session: false,
+      hd: 'nasdum.cz',
+    });
+  });
+
+  it('omits hd when several domains are allowed, as hd takes one value', async () => {
+    mockGetAppConfig.mockResolvedValue({
+      registration: { allowedDomains: ['nasdum.cz', 'example.com'] },
+    });
+    const app = createApp();
+
+    await request(app).get('/oauth/google').expect(204);
+
+    expect(googleAuthOptions()).toEqual({
+      scope: ['openid', 'profile', 'email'],
+      session: false,
+    });
+  });
+
+  it('omits hd when no domain restriction is configured', async () => {
+    const app = createApp();
+
+    await request(app).get('/oauth/google').expect(204);
+
+    expect(googleAuthOptions()).toEqual({
+      scope: ['openid', 'profile', 'email'],
+      session: false,
+    });
+  });
+
+  it('still authenticates when the config lookup fails', async () => {
+    mockGetAppConfig.mockRejectedValue(new Error('config unavailable'));
+    const app = createApp();
+
+    await request(app).get('/oauth/google').expect(204);
+
+    expect(googleAuthOptions()).toEqual({
+      scope: ['openid', 'profile', 'email'],
+      session: false,
+    });
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      '[OAuth] Failed to resolve the Google hosted domain hint',
+      expect.any(Error),
+    );
   });
 });

@@ -63,13 +63,32 @@ router.get('/error', (req, res) => {
 /**
  * Google Routes
  */
-router.get(
-  '/google',
-  passport.authenticate('google', {
-    scope: ['openid', 'profile', 'email'],
+const googleScope = ['openid', 'profile', 'email'];
+
+/**
+ * Google's `hd` parameter narrows its account chooser to a single hosted domain, so a
+ * user is not offered accounts that `checkDomainAllowed` would reject after the fact.
+ * It is only a hint — the strategy and that middleware stay authoritative — and it is
+ * sent solely when one allowed domain is configured, as `hd` takes a single value.
+ */
+const getHostedDomain = (allowedDomains) =>
+  Array.isArray(allowedDomains) && allowedDomains.length === 1 ? allowedDomains[0] : undefined;
+
+router.get('/google', async (req, res, next) => {
+  let hostedDomain;
+  try {
+    const appConfig = await getAppConfig({ baseOnly: true });
+    hostedDomain = getHostedDomain(appConfig?.registration?.allowedDomains);
+  } catch (error) {
+    logger.error('[OAuth] Failed to resolve the Google hosted domain hint', error);
+  }
+
+  return passport.authenticate('google', {
+    scope: googleScope,
     session: false,
-  }),
-);
+    ...(hostedDomain != null && { hd: hostedDomain }),
+  })(req, res, next);
+});
 
 router.get(
   '/google/callback',
@@ -77,7 +96,7 @@ router.get(
     failureRedirect: `${domains.client}/oauth/error`,
     failureMessage: true,
     session: false,
-    scope: ['openid', 'profile', 'email'],
+    scope: googleScope,
   }),
   setBalanceConfig,
   checkDomainAllowed,
