@@ -21,6 +21,22 @@ on:
         default: ''
         type: choice
         options: ['', 'true', 'false']
+      allow_social_login:
+        description: 'Show the configured social sign-in buttons (leave unset to keep the current setting)'
+        required: false
+        default: ''
+        type: choice
+        options: ['', 'true', 'false']
+      allow_social_registration:
+        description: 'Let a first social sign-in create the account (leave unset to keep the current setting)'
+        required: false
+        default: ''
+        type: choice
+        options: ['', 'true', 'false']
+      allowed_email_domains:
+        description: 'Comma-separated email domains allowed to sign in, e.g. example.com (leave unset to keep the current list)'
+        required: false
+        default: ''
 
 concurrency:
   group: deploy-hetzner
@@ -53,6 +69,10 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           PROXY_NETWORK: ${{ inputs.proxy_network || vars.HETZNER_PROXY_NETWORK }}
           ALLOW_REGISTRATION: ${{ inputs.allow_registration }}
+          # Email domains allowed to sign in. Kept as a repository variable so
+          # every deploy reasserts the same allowlist; the input overrides it
+          # for one run.
+          ALLOWED_EMAIL_DOMAINS: ${{ inputs.allowed_email_domains || vars.ALLOWED_EMAIL_DOMAINS }}
           # Optional: set these secrets to manage provider keys and Google
           # OAuth credentials from here instead of editing .env on the server.
           # Unset ones are left alone.
@@ -61,9 +81,10 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           # Credentials alone do not surface the Google button — .env.example
-          # ships both flags off. Set them as repository variables to enable it.
-          ALLOW_SOCIAL_LOGIN: ${{ vars.ALLOW_SOCIAL_LOGIN }}
-          ALLOW_SOCIAL_REGISTRATION: ${{ vars.ALLOW_SOCIAL_REGISTRATION }}
+          # ships both flags off. The repository variables keep them on across
+          # deploys; the inputs override them for one run.
+          ALLOW_SOCIAL_LOGIN: ${{ inputs.allow_social_login || vars.ALLOW_SOCIAL_LOGIN }}
+          ALLOW_SOCIAL_REGISTRATION: ${{ inputs.allow_social_registration || vars.ALLOW_SOCIAL_REGISTRATION }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
@@ -71,6 +92,11 @@ jobs:
             "DOMAIN='$DOMAIN' ACME_EMAIL='$ACME_EMAIL' BRANCH='$DEPLOY_BRANCH' \
              REPO_URL='$REPO_URL' PROXY_NETWORK='$PROXY_NETWORK' \
              ALLOW_REGISTRATION='$ALLOW_REGISTRATION' \
+             ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
+             ALLOW_SOCIAL_REGISTRATION='$ALLOW_SOCIAL_REGISTRATION' \
+             ALLOWED_EMAIL_DOMAINS='$ALLOWED_EMAIL_DOMAINS' \
+             GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
+             GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \

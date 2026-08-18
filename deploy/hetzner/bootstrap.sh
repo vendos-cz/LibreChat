@@ -23,6 +23,10 @@ SETUP_FIREWALL="${SETUP_FIREWALL:-0}"
 # owns ports 80/443. LibreChat then starts without its own Caddy and joins that
 # network, and the proxy is expected to route a hostname to LibreChat-API:3080.
 PROXY_NETWORK="${PROXY_NETWORK:-}"
+# Comma-separated email domains allowed to sign in, e.g. "example.com". Written
+# to librechat.yaml as registration.allowedDomains, which gates social and local
+# signups alike. Empty keeps whatever that file already says.
+ALLOWED_EMAIL_DOMAINS="${ALLOWED_EMAIL_DOMAINS:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -141,6 +145,73 @@ current_env() {
   sed -nE "s/^$1=(.*)$/\1/p" .env | tail -n1
 }
 
+# set_allowed_domains "a.com,b.com" — rewrites registration.allowedDomains in
+# librechat.yaml, the only place LibreChat reads an email-domain allowlist from
+# (no environment variable covers it). Only that key is touched: the rest of the
+# operator's file, comments included, is copied through untouched.
+set_allowed_domains() {
+  local domains="$1" rendered
+  [ -n "$domains" ] || return 0
+
+  rendered="$(mktemp)"
+  if ! DOMAINS="$domains" awk '
+    function emit_block() {
+      printf "  allowedDomains:\n"
+      count = split(ENVIRON["DOMAINS"], entries, ",")
+      for (i = 1; i <= count; i++) {
+        gsub(/^[ \t]+|[ \t]+$/, "", entries[i])
+        if (entries[i] != "") {
+          printf "    - \"%s\"\n", entries[i]
+        }
+      }
+      emitted = 1
+    }
+    /^registration[ \t]*:/ { seen = 1 }
+    /^registration[ \t]*:[ \t]*$/ { print; in_block = 1; next }
+    # Any unindented, non-empty line starts the next top-level key or comment.
+    in_block && /^[^ \t]/ {
+      if (!emitted) { emit_block() }
+      in_block = 0
+      in_list = 0
+    }
+    # Replace the existing key in place, commented out or not, and swallow the
+    # list items that belonged to it.
+    in_block && /^[ \t]+#?[ \t]*allowedDomains[ \t]*:/ { emit_block(); in_list = 1; next }
+    in_block && in_list {
+      if ($0 ~ /^[ \t]+#?[ \t]*-/) { next }
+      in_list = 0
+    }
+    { print }
+    END {
+      if (in_block && !emitted) { emit_block(); exit 0 }
+      if (emitted) { exit 0 }
+      if (seen) { exit 3 }
+      print "registration:"
+      emit_block()
+    }
+  ' librechat.yaml > "$rendered"; then
+    rm -f "$rendered"
+    die "librechat.yaml has a registration key this script cannot rewrite.
+  Set registration.allowedDomains by hand in $DEPLOY_DIR/librechat.yaml."
+  fi
+
+  # PyYAML ships with cloud-init on these images; skip rather than fail if the
+  # server has neither, since the rewrite is textual and the file is small.
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+    python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$rendered" 2>/dev/null \
+      || { rm -f "$rendered"; die "Rewriting registration.allowedDomains produced invalid YAML; librechat.yaml left unchanged."; }
+  fi
+
+  if cmp -s "$rendered" librechat.yaml; then
+    rm -f "$rendered"
+    return 0
+  fi
+
+  cat "$rendered" > librechat.yaml
+  rm -f "$rendered"
+  log "Set registration.allowedDomains to $domains in librechat.yaml"
+}
+
 if [ ! -f .env ]; then
   log "Generating .env from .env.example with fresh secrets"
   cp "$APP_DIR/.env.example" .env
@@ -196,6 +267,8 @@ for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION 
   set_env "$override" "$override_value"
   log "Applied $override from the deploy environment"
 done
+
+set_allowed_domains "$ALLOWED_EMAIL_DOMAINS"
 
 set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
 set_env BUILD_BRANCH "$BRANCH"

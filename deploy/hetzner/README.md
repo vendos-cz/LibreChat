@@ -68,6 +68,53 @@ public IP — fine for a smoke test, not for real use.
 3. Add the provider API keys you need (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …)
    to `.env` and re-run `docker compose up -d api`.
 
+## Google sign-in for one company domain
+
+Instead of handing out passwords, let everyone with a company address sign in
+with Google and get their account on first use. Two pieces do the work: the
+Google OAuth client in `.env`, and the email-domain allowlist in
+`librechat.yaml`.
+
+**1. Create the OAuth client** in Google Cloud Console, under **APIs &
+Services**:
+
+- **OAuth consent screen** — user type **Internal** if the company domain is a
+  Google Workspace domain. Only accounts in that Workspace can then reach the
+  client at all, and no app verification is needed.
+- **Credentials → Create credentials → OAuth client ID → Web application** —
+  authorized redirect URI `https://<your-domain>/oauth/google/callback`, matched
+  exactly, scheme included. See the Actions section below for how that URI is
+  derived and when a second one is needed.
+
+Google refuses redirect URIs on domains whose ownership cannot be verified, so a
+placeholder hostname such as `sslip.io` will not do here — use a host under a
+domain you own.
+
+**2. Deploy the settings**, either through the workflow below or on the server:
+
+```bash
+cd /opt/librechat/deploy/hetzner
+ALLOWED_EMAIL_DOMAINS=example.com \
+  ALLOW_SOCIAL_LOGIN=true ALLOW_SOCIAL_REGISTRATION=true \
+  GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… \
+  DOMAIN=chat.example.com ./bootstrap.sh
+```
+
+| Setting | Where it lands | Effect |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | `.env` | Enables the Google strategy |
+| `ALLOW_SOCIAL_LOGIN` | `.env` | Shows the "Continue with Google" button |
+| `ALLOW_SOCIAL_REGISTRATION` | `.env` | Lets a first Google sign-in create the account |
+| `ALLOWED_EMAIL_DOMAINS` | `librechat.yaml` (`registration.allowedDomains`) | Rejects every other email domain |
+
+`ALLOW_REGISTRATION` stays independent: leave it `false` and the email/password
+signup form remains closed while Google sign-in works.
+
+The allowlist is what enforces the restriction — it is checked before the
+account is created, and again on every later sign-in. With exactly one domain
+allowed, LibreChat also sends Google's `hd` parameter, so the account chooser
+offers only accounts on that domain instead of failing after the fact.
+
 ## Behind an existing reverse proxy
 
 If the server already runs a proxy on 80/443, set `PROXY_NETWORK` to one of that
@@ -124,6 +171,13 @@ pull the file out from under the running shell.)
 | `HETZNER_SSH_PORT` | no | Defaults to `22` |
 | `HETZNER_DOMAIN` | no | Omit to serve plain HTTP |
 | `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact |
+
+What changes per run — `branch`, `domain`, `proxy_network`,
+`allow_registration`, `allow_social_login`, `allow_social_registration`,
+`allowed_email_domains` — are workflow inputs, each applied only when given, so
+an empty one keeps what the server already has. `allowed_email_domains` also
+falls back to the `ALLOWED_EMAIL_DOMAINS` repository variable, which is where to
+keep it so every deploy reasserts the same allowlist.
 
 Settings the deploy can push into the server's `.env`, so they need no
 hand-editing over SSH. Each is applied only when set; an unset one leaves the
