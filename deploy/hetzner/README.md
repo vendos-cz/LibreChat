@@ -145,6 +145,7 @@ current value alone.
 | `ANTHROPIC_API_KEY` | Provider key |
 | `OPENAI_API_KEY` | Provider key |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `KIMI_API_KEY` | Moonshot/Kimi key. Setting it also adds the Kimi endpoint to `librechat.yaml`; clearing it removes the endpoint again |
 
 | Variable | Notes |
 |---|---|
@@ -162,6 +163,14 @@ a separate path. The deploy therefore writes `registration.allowedDomains` from
 leaving the rest of the file (including the unrelated `allowedDomains` keys under
 `actions` and `mcpServers`) untouched. Clearing the value leaves the file alone
 rather than removing the restriction.
+
+**Adding a model provider.** A secret on its own does nothing: the key has to
+reach the server's `.env` *and* an endpoint has to reference it in
+`librechat.yaml`, which is seeded once from `librechat.example.yaml` and then
+never replaced. Kimi shows how both halves are wired — the endpoint block is
+delimited by `# >>> deploy-managed:` markers so it can be rewritten or removed
+without touching the endpoints upstream ships in the same list, and it is only
+written while the key is set, so a menu entry never outlives its credential.
 
 Google's redirect URI is `${DOMAIN_SERVER}${GOOGLE_CALLBACK_URL}`, i.e.
 `https://chat.example.com/oauth/google/callback` with the default
