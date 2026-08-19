@@ -127,8 +127,14 @@ pull the file out from under the running shell.)
 | `HETZNER_SSH_KEY` | yes | Private key whose public half is in the server's `authorized_keys` |
 | `HETZNER_USER` | no | Defaults to `root` |
 | `HETZNER_SSH_PORT` | no | Defaults to `22` |
-| `HETZNER_DOMAIN` | no | Omit to serve plain HTTP |
-| `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact |
+| `HETZNER_DOMAIN` | first deploy only | Omit to serve plain HTTP; afterwards the hostname in `.env` is reused |
+| `ACME_EMAIL` | required with `HETZNER_DOMAIN` | Let's Encrypt contact; reused from `.env` once set |
+
+Neither has to be re-supplied on a redeploy. `DOMAIN_SERVER` is what OAuth
+callback URLs are built from, so a deploy that arrived without a hostname used
+to move the deployment onto its bare IP and break every social login; an unset
+value now keeps what `.env` records and only falls back to the IP on a
+deployment that never had a hostname.
 
 Settings the deploy can push into the server's `.env`, so they need no
 hand-editing over SSH. Each is applied only when set; an unset one leaves the
