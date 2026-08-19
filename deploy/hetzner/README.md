@@ -144,7 +144,6 @@ current value alone.
 |---|---|
 | `ANTHROPIC_API_KEY` | Provider key |
 | `OPENAI_API_KEY` | Provider key |
-| `GOOGLE_CLIENT_ID` | Google OAuth client for social sign-in |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 
 | Variable | Notes |
@@ -152,6 +151,7 @@ current value alone.
 | `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
+| `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 **Who can sign in.** Social login applies no domain restriction of its own: with
 `registration.allowedDomains` unset in `librechat.yaml`, anyone whose Google

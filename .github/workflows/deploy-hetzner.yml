@@ -58,7 +58,12 @@ jobs:
           # Unset ones are left alone.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          # A Google client id is not confidential — it travels in the redirect
+          # every signing-in browser sees — so it is defaulted here rather than
+          # stored as a secret, where a truncated paste is invisible and
+          # surfaces only as Google's "OAuth client was not found". Override
+          # with a repository variable when the client changes.
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID || '851039774056-ai8alf50sv2r5p0hkuna314s8f194u28.apps.googleusercontent.com' }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           # Credentials alone do not surface the Google button — .env.example
           # ships both flags off. Set them as repository variables to enable it.
