@@ -30,6 +30,10 @@ ALLOWED_REGISTRATION_DOMAINS="${ALLOWED_REGISTRATION_DOMAINS:-}"
 # Moonshot/Kimi key. Set it and the endpoint appears in librechat.yaml; clear it
 # and the endpoint is removed again, so a menu entry never outlives its key.
 KIMI_API_KEY="${KIMI_API_KEY:-}"
+# The OpenRouter entry upstream ships reads ${OPENROUTER_KEY}, so delivering
+# that secret is all a shared key needs. Set this to "true" to *also* offer a
+# second entry each user keys themselves.
+OPENROUTER_USER_KEYS="${OPENROUTER_USER_KEYS:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -173,30 +177,35 @@ fi
 
 # A GitHub secret on its own does nothing for a provider: the key has to reach
 # the server's .env *and* an endpoint has to reference it in librechat.yaml.
-# The block below is delimited by markers so it can be rewritten or removed
-# without disturbing the endpoints upstream ships in the same list.
-#
-# Model ids and baseURL are from platform.kimi.ai's API docs. `fetch: true`
-# means the live list from /v1/models is what the picker shows; `default` is
-# only the fallback the schema requires, so a retired id here cannot hide a
-# model that still exists.
-KIMI_MARKER_OPEN='    # >>> deploy-managed: kimi'
-KIMI_MARKER_CLOSE='    # <<< deploy-managed: kimi'
+# Everything this deploy adds lives inside one marker pair, so the endpoints
+# upstream ships in the same list are never disturbed, and an entry withdrawn
+# here disappears instead of lingering.
+ENDPOINTS_MARKER_OPEN='    # >>> deploy-managed endpoints'
+ENDPOINTS_MARKER_CLOSE='    # <<< deploy-managed endpoints'
 
-set_kimi_endpoint() {
+# A custom endpoint takes its key either from the environment or from each user,
+# never both: initialize.ts reads `userValues.apiKey` and ignores the configured
+# value as soon as it is `user_provided`. Offering both therefore means offering
+# two entries — one on the deployment's key, one on the user's own.
+set_managed_endpoints() {
   grep -qE '^  custom:[[:space:]]*$' librechat.yaml || die \
-    "librechat.yaml has no 'endpoints.custom:' list, so the Kimi endpoint cannot be
-  added. Add the key, or clear KIMI_API_KEY to leave the file alone."
+    "librechat.yaml has no 'endpoints.custom:' list, so deploy-managed endpoints
+  cannot be added. Restore the key, or clear the provider keys to leave it alone."
 
   # `close` is an awk keyword, so the marker variables cannot be named after it.
-  awk -v want="$1" -v mark_open="$KIMI_MARKER_OPEN" -v mark_close="$KIMI_MARKER_CLOSE" '
+  awk -v kimi="$1" -v byok="$2" \
+      -v mark_open="$ENDPOINTS_MARKER_OPEN" -v mark_close="$ENDPOINTS_MARKER_CLOSE" '
     $0 == mark_open { dropping = 1; next }
     $0 == mark_close { dropping = 0; next }
     dropping { next }
     /^  custom:[[:space:]]*$/ {
       print
-      if (want == "yes") {
-        print mark_open
+      if (kimi != "yes" && byok != "yes") { next }
+      print mark_open
+      if (kimi == "yes") {
+        # Model ids and baseURL are from platform.kimi.ai. `fetch: true` means
+        # the live /v1/models list is what the picker shows, so a retired id in
+        # `default` — which the schema requires — cannot hide a live model.
         print "    - name: \"Kimi\""
         print "      apiKey: \"${KIMI_API_KEY}\""
         print "      baseURL: \"https://api.moonshot.ai/v1\""
@@ -209,8 +218,23 @@ set_kimi_endpoint() {
         print "      titleConvo: true"
         print "      titleModel: \"current_model\""
         print "      modelDisplayLabel: \"Kimi\""
-        print mark_close
       }
+      if (byok == "yes") {
+        # Same gateway as the OpenRouter entry upstream ships, but keyed per
+        # user, so anyone can spend their own credit without a shared secret.
+        print "    - name: \"OpenRouter (own key)\""
+        print "      apiKey: \"user_provided\""
+        print "      baseURL: \"https://openrouter.ai/api/v1\""
+        print "      models:"
+        print "        default:"
+        print "          - \"openai/gpt-4o-mini\""
+        print "        fetch: true"
+        print "      titleConvo: true"
+        print "      titleModel: \"current_model\""
+        print "      dropParams: [\"stop\"]"
+        print "      modelDisplayLabel: \"OpenRouter (own key)\""
+      }
+      print mark_close
       next
     }
     { print }
@@ -219,13 +243,13 @@ set_kimi_endpoint() {
   mv librechat.yaml.new librechat.yaml
 }
 
-if [ -n "$KIMI_API_KEY" ]; then
-  set_kimi_endpoint yes
-  log "Kimi endpoint present in librechat.yaml"
-else
-  set_kimi_endpoint no
-  log "KIMI_API_KEY unset — Kimi endpoint removed from librechat.yaml"
-fi
+kimi_wanted=no
+[ -z "$KIMI_API_KEY" ] || kimi_wanted=yes
+byok_wanted=no
+[ "$OPENROUTER_USER_KEYS" != "true" ] || byok_wanted=yes
+
+set_managed_endpoints "$kimi_wanted" "$byok_wanted"
+log "Deploy-managed endpoints — Kimi: $kimi_wanted, OpenRouter (own key): $byok_wanted"
 
 # set_env KEY VALUE — replaces an existing assignment (commented or not) or
 # appends the key. Values are written verbatim, so keep them shell-safe.
@@ -318,7 +342,7 @@ fi
 # the server. Each is applied only when given, so an unset one keeps its
 # current value rather than reverting to the example default.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
-                ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY \
+                ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY OPENROUTER_KEY \
                 GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue

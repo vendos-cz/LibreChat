@@ -61,6 +61,12 @@ jobs:
           # Setting this both delivers the key and makes the Kimi endpoint
           # appear; clearing it removes the endpoint again.
           KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          # Shared OpenRouter credit for everyone. The endpoint that reads it
+          # is the one upstream's example already ships.
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          # Additionally offer an OpenRouter entry each user keys themselves.
+          # A custom endpoint cannot do both on one entry, so this is a second.
+          OPENROUTER_USER_KEYS: ${{ vars.OPENROUTER_USER_KEYS || 'true' }}
           # A Google client id is not confidential — it travels in the redirect
           # every signing-in browser sees — so it is defaulted here rather than
           # stored as a secret, where a truncated paste is invisible and
@@ -87,6 +93,8 @@ jobs:
              ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' \
              KIMI_API_KEY='$KIMI_API_KEY' \
+             OPENROUTER_KEY='$OPENROUTER_KEY' \
+             OPENROUTER_USER_KEYS='$OPENROUTER_USER_KEYS' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
              GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
