@@ -27,6 +27,9 @@ PROXY_NETWORK="${PROXY_NETWORK:-}"
 # restriction of its own, so leaving this empty lets anyone with a Google
 # account register once the OAuth consent screen is published.
 ALLOWED_REGISTRATION_DOMAINS="${ALLOWED_REGISTRATION_DOMAINS:-}"
+# Moonshot/Kimi key. Set it and the endpoint appears in librechat.yaml; clear it
+# and the endpoint is removed again, so a menu entry never outlives its key.
+KIMI_API_KEY="${KIMI_API_KEY:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -168,6 +171,62 @@ else
   log "ALLOWED_REGISTRATION_DOMAINS unset — librechat.yaml left alone (any domain may sign in)"
 fi
 
+# A GitHub secret on its own does nothing for a provider: the key has to reach
+# the server's .env *and* an endpoint has to reference it in librechat.yaml.
+# The block below is delimited by markers so it can be rewritten or removed
+# without disturbing the endpoints upstream ships in the same list.
+#
+# Model ids and baseURL are from platform.kimi.ai's API docs. `fetch: true`
+# means the live list from /v1/models is what the picker shows; `default` is
+# only the fallback the schema requires, so a retired id here cannot hide a
+# model that still exists.
+KIMI_MARKER_OPEN='    # >>> deploy-managed: kimi'
+KIMI_MARKER_CLOSE='    # <<< deploy-managed: kimi'
+
+set_kimi_endpoint() {
+  grep -qE '^  custom:[[:space:]]*$' librechat.yaml || die \
+    "librechat.yaml has no 'endpoints.custom:' list, so the Kimi endpoint cannot be
+  added. Add the key, or clear KIMI_API_KEY to leave the file alone."
+
+  # `close` is an awk keyword, so the marker variables cannot be named after it.
+  awk -v want="$1" -v mark_open="$KIMI_MARKER_OPEN" -v mark_close="$KIMI_MARKER_CLOSE" '
+    $0 == mark_open { dropping = 1; next }
+    $0 == mark_close { dropping = 0; next }
+    dropping { next }
+    /^  custom:[[:space:]]*$/ {
+      print
+      if (want == "yes") {
+        print mark_open
+        print "    - name: \"Kimi\""
+        print "      apiKey: \"${KIMI_API_KEY}\""
+        print "      baseURL: \"https://api.moonshot.ai/v1\""
+        print "      models:"
+        print "        default:"
+        print "          - \"kimi-k3\""
+        print "          - \"kimi-k2.6\""
+        print "          - \"moonshot-v1-128k\""
+        print "        fetch: true"
+        print "      titleConvo: true"
+        print "      titleModel: \"current_model\""
+        print "      modelDisplayLabel: \"Kimi\""
+        print mark_close
+      }
+      next
+    }
+    { print }
+  ' librechat.yaml > librechat.yaml.new
+
+  mv librechat.yaml.new librechat.yaml
+}
+
+if [ -n "$KIMI_API_KEY" ]; then
+  set_kimi_endpoint yes
+  log "Kimi endpoint present in librechat.yaml"
+else
+  set_kimi_endpoint no
+  log "KIMI_API_KEY unset — Kimi endpoint removed from librechat.yaml"
+fi
+
 # set_env KEY VALUE — replaces an existing assignment (commented or not) or
 # appends the key. Values are written verbatim, so keep them shell-safe.
 set_env() {
@@ -259,7 +318,7 @@ fi
 # the server. Each is applied only when given, so an unset one keeps its
 # current value rather than reverting to the example default.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
-                ANTHROPIC_API_KEY OPENAI_API_KEY \
+                ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY \
                 GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue

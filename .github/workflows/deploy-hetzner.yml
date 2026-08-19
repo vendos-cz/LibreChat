@@ -58,6 +58,9 @@ jobs:
           # Unset ones are left alone.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Setting this both delivers the key and makes the Kimi endpoint
+          # appear; clearing it removes the endpoint again.
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
           # A Google client id is not confidential — it travels in the redirect
           # every signing-in browser sees — so it is defaulted here rather than
           # stored as a secret, where a truncated paste is invisible and
@@ -83,6 +86,7 @@ jobs:
              ALLOW_REGISTRATION='$ALLOW_REGISTRATION' \
              ANTHROPIC_API_KEY='$ANTHROPIC_API_KEY' \
              OPENAI_API_KEY='$OPENAI_API_KEY' \
+             KIMI_API_KEY='$KIMI_API_KEY' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
              GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
