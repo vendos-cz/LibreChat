@@ -64,6 +64,11 @@ jobs:
           # ships both flags off. Set them as repository variables to enable it.
           ALLOW_SOCIAL_LOGIN: ${{ vars.ALLOW_SOCIAL_LOGIN }}
           ALLOW_SOCIAL_REGISTRATION: ${{ vars.ALLOW_SOCIAL_REGISTRATION }}
+          # Social login carries no domain restriction of its own, so this is
+          # the only thing standing between a published consent screen and
+          # anyone with a Google account registering. Defaulted rather than
+          # left to a variable so forgetting the variable fails closed.
+          ALLOWED_REGISTRATION_DOMAINS: ${{ vars.ALLOWED_REGISTRATION_DOMAINS || 'nasdum.cz' }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
@@ -77,4 +82,5 @@ jobs:
              GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
              ALLOW_SOCIAL_REGISTRATION='$ALLOW_SOCIAL_REGISTRATION' \
+             ALLOWED_REGISTRATION_DOMAINS='$ALLOWED_REGISTRATION_DOMAINS' \
              bash -s" < deploy/hetzner/bootstrap.sh

@@ -23,6 +23,10 @@ SETUP_FIREWALL="${SETUP_FIREWALL:-0}"
 # owns ports 80/443. LibreChat then starts without its own Caddy and joins that
 # network, and the proxy is expected to route a hostname to LibreChat-API:3080.
 PROXY_NETWORK="${PROXY_NETWORK:-}"
+# Comma-separated email domains allowed to sign in. Social login has no domain
+# restriction of its own, so leaving this empty lets anyone with a Google
+# account register once the OAuth consent screen is published.
+ALLOWED_REGISTRATION_DOMAINS="${ALLOWED_REGISTRATION_DOMAINS:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -126,6 +130,44 @@ if [ ! -f librechat.yaml ]; then
   cp "$APP_DIR/librechat.example.yaml" librechat.yaml
 fi
 
+# registration.allowedDomains lives only in librechat.yaml — there is no env
+# equivalent — so rewrite that one key in place rather than templating a
+# 1000-line example file that would then drift from upstream. Rewriting the
+# whole key each time keeps this idempotent.
+set_allowed_domains() {
+  grep -qE '^registration:[[:space:]]*$' librechat.yaml || die \
+    "librechat.yaml has no top-level 'registration:' key, so ALLOWED_REGISTRATION_DOMAINS
+  cannot be applied. Add the key, or clear the setting to leave the file alone."
+
+  awk -v domains="$1" '
+    $0 ~ /^registration:[[:space:]]*$/ {
+      print
+      print "  allowedDomains:"
+      count = split(domains, list, ",")
+      for (i = 1; i <= count; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", list[i])
+        if (list[i] != "") print "    - \"" list[i] "\""
+      }
+      inside = 1
+      next
+    }
+    inside && /^[^[:space:]]/ { inside = 0; dropping = 0 }
+    inside && /^[[:space:]]*#?[[:space:]]*allowedDomains:/ { dropping = 1; next }
+    inside && dropping && /^[[:space:]]*#?[[:space:]]*-[[:space:]]/ { next }
+    inside && dropping { dropping = 0 }
+    { print }
+  ' librechat.yaml > librechat.yaml.new
+
+  mv librechat.yaml.new librechat.yaml
+}
+
+if [ -n "$ALLOWED_REGISTRATION_DOMAINS" ]; then
+  set_allowed_domains "$ALLOWED_REGISTRATION_DOMAINS"
+  log "Sign-in restricted to: $ALLOWED_REGISTRATION_DOMAINS"
+else
+  log "ALLOWED_REGISTRATION_DOMAINS unset — librechat.yaml left alone (any domain may sign in)"
+fi
+
 # set_env KEY VALUE — replaces an existing assignment (commented or not) or
 # appends the key. Values are written verbatim, so keep them shell-safe.
 set_env() {
@@ -172,6 +214,14 @@ else
   set_env ACME_EMAIL ""
 fi
 
+# An unset PROXY_NETWORK means "keep the current mode", like every other
+# override below. Treating it as "switch to edge" made a deploy that simply
+# did not pass the value tear a proxy-mode server off its proxy and then
+# collide with it on port 80.
+if [ -z "$PROXY_NETWORK" ]; then
+  PROXY_NETWORK="$(current_env PROXY_NETWORK)"
+fi
+
 # Persist the mode so a bare `docker compose` in this directory behaves like
 # the deploy does. Without it a manual `up -d` either fails with "network
 # declared as external, but could not be found" or silently drops the api
@@ -206,6 +256,20 @@ port_listener() {
   ss -ltnpH "( sport = :$1 )" 2>/dev/null | tr -s ' '
 }
 
+# Both failures below are answered by picking a network. A bare list rarely
+# identifies which one, so name the two facts that do: the networks the api
+# container already shares with the proxy, and who holds the port.
+network_hints() {
+  printf 'networks: %s' \
+    "$(docker network ls --format '{{.Name}}' 2>/dev/null | sort | tr '\n' ' ')"
+  printf '\n  LibreChat-API is on: %s' \
+    "$(docker inspect LibreChat-API \
+       --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+       2>/dev/null)"
+  printf '\n  publishing port 80: %s' \
+    "$(docker ps --filter publish=80 --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
+}
+
 # Caddy binds 80/443 on the host. If something unrelated already holds them,
 # abort before touching it rather than fighting over the port. Skipped once our
 # own stack owns them, and irrelevant behind an external proxy.
@@ -216,13 +280,15 @@ if [ -z "$PROXY_NETWORK" ] && [ -z "$(compose ps -q caddy 2>/dev/null)" ]; then
     die "Port $port is already in use on this server:
     $listener
   LibreChat's Caddy needs 80 and 443. Free the port, set PROXY_NETWORK to run
-  behind that proxy, or deploy on a separate server (see cloud-init.yaml)."
+  behind that proxy, or deploy on a separate server (see cloud-init.yaml).
+  This server's $(network_hints)"
   done
 fi
 
 if [ -n "$PROXY_NETWORK" ]; then
   docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1 \
-    || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network."
+    || die "PROXY_NETWORK '$PROXY_NETWORK' is not an existing docker network.
+  This server's $(network_hints)"
   log "Running behind an external proxy on network $PROXY_NETWORK (no own Caddy)"
 fi
 
