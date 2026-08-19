@@ -1,0 +1,47 @@
+name: Link an account to Google
+
+# One-off maintenance for accounts that predate Google sign-in: LibreChat has no
+# account-linking flow, so an account registered under the local provider is
+# locked out of Google even when the email matches. See
+# deploy/hetzner/link-google.sh for what it does and why it cannot lock anyone
+# out. Reports and changes nothing unless `apply` is set.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write the change (leave unset to report only)'
+        required: false
+        default: ''
+        type: choice
+        options: ['', 'true']
+
+concurrency:
+  group: hetzner-link-google
+  cancel-in-progress: false
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/hetzner-ssh
+        with:
+          ssh_key: ${{ secrets.HETZNER_SSH_KEY }}
+          host: ${{ secrets.HETZNER_HOST }}
+          port: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+          user: ${{ secrets.HETZNER_USER || 'root' }}
+
+      # Piped over ssh exactly like bootstrap.sh, so the script the repo shows
+      # is the script that runs.
+      - name: Run link-google on the server
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER_NAME: ${{ secrets.HETZNER_USER }}
+          PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          APPLY: ${{ inputs.apply == 'true' && '1' || '' }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+            -o BatchMode=yes -o ServerAliveInterval=30 \
+            "${USER_NAME:-root}@$HOST" \
+            "APPLY='$APPLY' bash -s" < deploy/hetzner/link-google.sh
