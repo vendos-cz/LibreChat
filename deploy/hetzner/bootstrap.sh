@@ -350,6 +350,16 @@ for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION 
   log "Applied $override from the deploy environment"
 done
 
+# GPT-5.6 rejects function tools alongside reasoning_effort on
+# /v1/chat/completions. LibreChat switches such requests to /v1/responses by
+# itself, but only for first-party OpenAI: a base URL override makes
+# isCanonicalOpenAIBaseURL false and the request keeps the failing path, with
+# nothing in the deploy output saying so. Report whether the override is set —
+# the name only, never the value, since these logs are world-readable.
+openai_base_override=unset
+[ -z "$(current_env OPENAI_REVERSE_PROXY)" ] || openai_base_override=set
+log "OPENAI_REVERSE_PROXY: $openai_base_override (set means GPT-5.6 reasoning keeps Chat Completions)"
+
 set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"
 set_env BUILD_BRANCH "$BRANCH"
 set_env BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
