@@ -23,6 +23,10 @@ SETUP_FIREWALL="${SETUP_FIREWALL:-0}"
 # owns ports 80/443. LibreChat then starts without its own Caddy and joins that
 # network, and the proxy is expected to route a hostname to LibreChat-API:3080.
 PROXY_NETWORK="${PROXY_NETWORK:-}"
+# Comma-separated email domains allowed to sign in. Social login has no domain
+# restriction of its own, so leaving this empty lets anyone with a Google
+# account register once the OAuth consent screen is published.
+ALLOWED_REGISTRATION_DOMAINS="${ALLOWED_REGISTRATION_DOMAINS:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -124,6 +128,44 @@ cd "$DEPLOY_DIR"
 if [ ! -f librechat.yaml ]; then
   log "Seeding librechat.yaml from librechat.example.yaml"
   cp "$APP_DIR/librechat.example.yaml" librechat.yaml
+fi
+
+# registration.allowedDomains lives only in librechat.yaml — there is no env
+# equivalent — so rewrite that one key in place rather than templating a
+# 1000-line example file that would then drift from upstream. Rewriting the
+# whole key each time keeps this idempotent.
+set_allowed_domains() {
+  grep -qE '^registration:[[:space:]]*$' librechat.yaml || die \
+    "librechat.yaml has no top-level 'registration:' key, so ALLOWED_REGISTRATION_DOMAINS
+  cannot be applied. Add the key, or clear the setting to leave the file alone."
+
+  awk -v domains="$1" '
+    $0 ~ /^registration:[[:space:]]*$/ {
+      print
+      print "  allowedDomains:"
+      count = split(domains, list, ",")
+      for (i = 1; i <= count; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", list[i])
+        if (list[i] != "") print "    - \"" list[i] "\""
+      }
+      inside = 1
+      next
+    }
+    inside && /^[^[:space:]]/ { inside = 0; dropping = 0 }
+    inside && /^[[:space:]]*#?[[:space:]]*allowedDomains:/ { dropping = 1; next }
+    inside && dropping && /^[[:space:]]*#?[[:space:]]*-[[:space:]]/ { next }
+    inside && dropping { dropping = 0 }
+    { print }
+  ' librechat.yaml > librechat.yaml.new
+
+  mv librechat.yaml.new librechat.yaml
+}
+
+if [ -n "$ALLOWED_REGISTRATION_DOMAINS" ]; then
+  set_allowed_domains "$ALLOWED_REGISTRATION_DOMAINS"
+  log "Sign-in restricted to: $ALLOWED_REGISTRATION_DOMAINS"
+else
+  log "ALLOWED_REGISTRATION_DOMAINS unset — librechat.yaml left alone (any domain may sign in)"
 fi
 
 # set_env KEY VALUE — replaces an existing assignment (commented or not) or

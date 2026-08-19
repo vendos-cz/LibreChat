@@ -145,6 +145,17 @@ current value alone.
 |---|---|
 | `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
+| `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
+
+**Who can sign in.** Social login applies no domain restriction of its own: with
+`registration.allowedDomains` unset in `librechat.yaml`, anyone whose Google
+account the consent screen admits can sign in, and `ALLOW_SOCIAL_REGISTRATION`
+then creates the account. Closing email registration does not cover this — it is
+a separate path. The deploy therefore writes `registration.allowedDomains` from
+`ALLOWED_REGISTRATION_DOMAINS`, rewriting just that key in `librechat.yaml` and
+leaving the rest of the file (including the unrelated `allowedDomains` keys under
+`actions` and `mcpServers`) untouched. Clearing the value leaves the file alone
+rather than removing the restriction.
 
 Google's redirect URI is `${DOMAIN_SERVER}${GOOGLE_CALLBACK_URL}`, i.e.
 `https://chat.example.com/oauth/google/callback` with the default
