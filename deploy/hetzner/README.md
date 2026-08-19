@@ -146,12 +146,14 @@ current value alone.
 | `OPENAI_API_KEY` | Provider key |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `KIMI_API_KEY` | Moonshot/Kimi key. Setting it also adds the Kimi endpoint to `librechat.yaml`; clearing it removes the endpoint again |
+| `OPENROUTER_KEY` | Shared OpenRouter credit. The endpoint that reads it is the one upstream's example already ships |
 
 | Variable | Notes |
 |---|---|
 | `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
+| `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 **Who can sign in.** Social login applies no domain restriction of its own: with
@@ -167,10 +169,19 @@ rather than removing the restriction.
 **Adding a model provider.** A secret on its own does nothing: the key has to
 reach the server's `.env` *and* an endpoint has to reference it in
 `librechat.yaml`, which is seeded once from `librechat.example.yaml` and then
-never replaced. Kimi shows how both halves are wired — the endpoint block is
-delimited by `# >>> deploy-managed:` markers so it can be rewritten or removed
-without touching the endpoints upstream ships in the same list, and it is only
-written while the key is set, so a menu entry never outlives its credential.
+never replaced. Kimi shows how both halves are wired — everything the deploy
+adds lives inside one `# >>> deploy-managed endpoints` marker pair, so the
+endpoints upstream ships in the same list are never touched, and an entry is
+written only while its credential is configured, so a menu item cannot outlive
+the key behind it.
+
+**Shared key or the user's own.** A custom endpoint takes its key from the
+environment *or* from each user, never both: `initialize.ts` reads
+`userValues.apiKey` and ignores the configured value as soon as it is
+`user_provided`. Offering both therefore means offering two entries, which is
+what OpenRouter does here — the upstream entry spends `OPENROUTER_KEY`, and the
+deploy-managed "OpenRouter (own key)" entry prompts each user for their own via
+**Set API Key** in the UI and stores it encrypted.
 
 Google's redirect URI is `${DOMAIN_SERVER}${GOOGLE_CALLBACK_URL}`, i.e.
 `https://chat.example.com/oauth/google/callback` with the default
