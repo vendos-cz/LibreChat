@@ -201,6 +201,26 @@ for key in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY; do
   [ -n "$(current_env "$key")" ] || die "$key is empty in .env — set it before deploying."
 done
 
+# An unset DOMAIN must not move a live deployment onto its bare IP. OAuth
+# callback URLs are built from DOMAIN_SERVER, so rewriting it silently breaks
+# every social login. Recover the hostname .env already records and fall back
+# to the IP only on a deploy that never had one. SITE_ADDRESS holds the bare
+# hostname in domain mode and ":80" without one, so anything that is not a
+# plain hostname means there is nothing to recover.
+if [ -z "$DOMAIN" ]; then
+  DOMAIN="$(current_env SITE_ADDRESS)"
+  case "$DOMAIN" in
+    '' | *[!A-Za-z0-9.-]*) DOMAIN="" ;;
+  esac
+  [ -z "$DOMAIN" ] || log "DOMAIN unset — keeping $DOMAIN from .env"
+fi
+
+# Same reasoning: an unset contact must not wipe the stored one, or the next
+# certificate renewal loses its ACME account.
+if [ -z "$ACME_EMAIL" ]; then
+  ACME_EMAIL="$(current_env ACME_EMAIL)"
+fi
+
 if [ -n "$DOMAIN" ]; then
   set_env DOMAIN_CLIENT "https://$DOMAIN"
   set_env DOMAIN_SERVER "https://$DOMAIN"
