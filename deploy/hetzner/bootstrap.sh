@@ -130,6 +130,28 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
 fi
 
+# The Actions workflow pipes this script from the *runner's* checkout, while the
+# block above updates the server's checkout on its own. Those are two separate
+# reads of the branch, so they can land on different commits: push twice in
+# quick succession and an older script runs against a newer tree. Observed live
+# — the tracked config was installed from the new tree while a step added in the
+# same push was missing, because the script came from the previous commit.
+#
+# Fix it where it can be fixed: hand off, exactly once, to the copy in the tree
+# that is about to be deployed. Whatever arrived on stdin, the script that does
+# the work is then always the one that ships with the config it installs.
+#
+# The copy runs from /tmp, so the re-exec guard above does not fire again, and
+# BOOTSTRAP_HANDOFF stops this from looping. The cost is one repeated pass over
+# the prerequisites, which are all idempotent.
+if [ "${BOOTSTRAP_HANDOFF:-}" != "1" ] && [ -f "$DEPLOY_DIR/bootstrap.sh" ]; then
+  HANDOFF_SELF="$(mktemp /tmp/librechat-bootstrap-tree.XXXXXX)"
+  cp "$DEPLOY_DIR/bootstrap.sh" "$HANDOFF_SELF"
+  export BOOTSTRAP_HANDOFF=1
+  log "Handing off to the checked-out bootstrap.sh ($(git -C "$APP_DIR" rev-parse --short HEAD))"
+  exec bash "$HANDOFF_SELF" "$@"
+fi
+
 cd "$DEPLOY_DIR"
 
 # librechat.yaml is gitignored upstream, so the version-controlled copy lives
