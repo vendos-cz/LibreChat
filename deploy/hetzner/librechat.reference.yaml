@@ -1,0 +1,489 @@
+# =============================================================================
+#  librechat.yaml - chat.nasdum.cz
+#  Config schema 1.3.14 (LibreChat v0.8.8-rc1)
+#  Sestaveno 21. 8. 2026. Nahrazuje seedovaný librechat.example.yaml.
+#
+#  TENHLE SOUBOR JE ZDROJ PRAVDY. Žije v gitu jako
+#      deploy/hetzner/librechat.reference.yaml
+#  a bootstrap.sh ho při KAŽDÉM deployi nakopíruje na server jako
+#      /opt/librechat/deploy/hetzner/librechat.yaml
+#  (se zálohou librechat.yaml.bak-<timestamp>). Bind-mount na
+#  /app/librechat.yaml:ro.
+#
+#  Důsledek: ruční editace na serveru se PŘÍŠTÍM DEPLOYEM PŘEPÍŠE.
+#  Uprav tenhle soubor v gitu a spusť workflow "Deploy to Hetzner".
+#  Rychlá změna bez rebuildu: uprav na serveru + `docker restart LibreChat-API`,
+#  ale nezapomeň ji vrátit i sem, jinak ji příští deploy smaže.
+#
+#  POZOR na dvě věci, které bootstrap.sh přepisuje:
+#    1) blok pod `registration:` (allowedDomains z ALLOWED_REGISTRATION_DOMAINS)
+#    2) endpointy mezi markery `# >>> deploy-managed endpoints`, které si
+#       bootstrap vloží sám hned za `  custom:`. Proto tu markery NEJSOU -
+#       tím se zároveň zbavíme duplicitního Kimi ze starého formátu markerů.
+#  Zbytek souboru bootstrap nechává na pokoji.
+# =============================================================================
+
+version: 1.3.14
+
+# Cache načteného configu a modelů. Redis tu neběží, takže se nemusí flushovat -
+# restart kontejneru stačí.
+cache: true
+
+imageOutputType: 'webp' # menší soubory než png, plná podpora v UI
+secureImageLinks: true # lokálně hostované obrázky nejsou veřejně dosažitelné
+
+# -----------------------------------------------------------------------------
+# UI
+# -----------------------------------------------------------------------------
+# DŮLEŽITÉ, a je to jinak, než se běžně píše: klíče, které tu jsou UVEDENÉ
+# EXPLICITNĚ, se zapisují do rolí v Mongu při KAŽDÉM startu, ne jen při prvním.
+# (permissions.ts: `isExplicitlyConfigured` = klíč není undefined.)
+# Takže: co změníš v Admin Panelu, to se po restartu vrátí na hodnotu odsud.
+# Když chceš nějakou věc spravovat z Admin Panelu, VYMAŽ ten klíč z tohohle
+# souboru - jinak ho tady přebiješ.
+#
+# Naopak modelSelect, parameters, presets, customWelcome, autoSubmitFromUrl,
+# contextUsage, contextCost a currency nejsou oprávnění vůbec - čtou se
+# z tohohle souboru při každém requestu.
+interface:
+  customWelcome: 'Ahoj {{user.name}}. Co dneska řešíme?'
+
+  modelSelect: true
+  parameters: true
+  presets: true
+  multiConvo: true # vedle sebe dva modely na stejný dotaz
+  bookmarks: true
+  memories: true # paměť (memory blok níž)
+
+  agents:
+    use: true
+    create: true
+    share: true # aby se agenti dali sdílet kolegům
+    public: false
+  prompts:
+    use: true
+    create: true
+    share: true
+    public: false
+  skills:
+    use: true
+    create: true
+    share: true
+    public: false
+
+  # Kolik kontextu a kolik to stojí. contextCost je defaultně vypnutý.
+  contextUsage: true
+  contextCost: true
+  currency:
+    code: 'CZK'
+    rate: 21.5 # USD -> CZK, uprav podle kurzu
+
+  runCode: true # tlačítko "Run code" u bloků kódu (potřebuje Code Interpreter)
+  # webSearch: true             # ZAPNOUT až bude SERPER_API_KEY (viz blok webSearch níž).
+  #                             # Zakomentované = oprávnění v Mongu se nechá, jak je.
+  fileSearch: true
+  fileCitations: true
+
+  temporaryChat: true
+  temporaryChatRetention: 168 # hodin (7 dní)
+
+  # Bezpečnost: bez tohohle stačí, aby ti někdo poslal odkaz
+  # /c/new?prompt=...&submit=true a LibreChat to sám odešle.
+  autoSubmitFromUrl: false
+
+  marketplace:
+    use: false # veřejný katalog agentů nepotřebuješ
+
+  # Co má být předpíchnuté v liště nástrojů u nové konverzace
+  defaultPinnedTools:
+    - 'artifacts'
+    - 'mcp'
+    # - 'web_search'            # přidat spolu se SERPER_API_KEY
+
+  # Vlastní právní texty místo odkazů na librechat.ai.
+  # Vyhoď oba bloky, dokud nemáš na chat.nasdum.cz co odkazovat.
+  # privacyPolicy:
+  #   externalUrl: 'https://nasdum.cz/privacy'
+  #   openNewTab: true
+  # termsOfService:
+  #   externalUrl: 'https://nasdum.cz/tos'
+  #   openNewTab: true
+  #   modalAcceptance: false
+
+# -----------------------------------------------------------------------------
+# Paměť (User Memory)
+# -----------------------------------------------------------------------------
+# Memory agent je samostatné volání na pozadí na SERVEROVÉM klíči z .env.
+# Proto anthropic, ne OpenRouter - dokud v .env není OPENROUTER_KEY,
+# OpenRouter se jako memory agent nastavit nedá.
+memory:
+  disabled: false
+  personalize: true
+  tokenLimit: 10000
+  maxInputTokens: 12000
+  messageWindowSize: 5
+  validKeys:
+    - preferences
+    - work_info
+    - personal_info
+    - skills
+    - interests
+    - context
+  agent:
+    enabled: true # od 1.3.14 povinné, jinak automatická extrakce neběží
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    instructions: |
+      Ukládej jen výslovně řečené preference a důležitá fakta o uživateli.
+      Piš česky. Zastaralé nebo opravené informace ihned smaž.
+    model_parameters:
+      temperature: 0.2
+
+# -----------------------------------------------------------------------------
+# Web search
+# -----------------------------------------------------------------------------
+# Tři vrstvy: provider (povinný) -> scraper (volitelný) -> reranker (volitelný).
+#
+# CELÝ BLOK JE ZAKOMENTOVANÝ, protože SERPER_API_KEY zatím není v .env
+# a bez klíče by hledání vracelo 401. Až klíč přidáš jako GitHub Secret,
+# odkomentuj tenhle blok, `interface.webSearch` a 'web_search'
+# v defaultPinnedTools - a nasaď znovu.
+# Serper má free tier 2 500 dotazů a umí i scraping. https://serper.dev
+#
+# webSearch:
+#   searchProvider: 'serper'
+#   serperApiKey: '${SERPER_API_KEY}'
+
+#   # Scraper: když ho neurčíš, LibreChat vezme první, ke kterému má klíč -
+#   # tedy Serper. Vlastní vestavěný scraper se nepoužije. Firecrawl je navíc.
+#   scraperProvider: 'firecrawl'   # POZOR: klíč je scraperProvider, ne scraperType
+#   firecrawlApiKey: '${FIRECRAWL_API_KEY}'
+
+#   rerankerType: 'none'
+#   scraperTimeout: 10000
+#   safeSearch: 0            # 0=off, 1=moderate (default), 2=strict
+
+#   # Od 1.3.14 se privátní a loopback adresy blokují (SSRF ochrana).
+#   # Kdyby sis pustil SearXNG/Firecrawl v Dockeru, musí být tady:
+#   allowedAddresses:
+#     - 'searxng:8080'
+#     - 'firecrawl-api:3002'
+
+# -----------------------------------------------------------------------------
+# Soubory a RAG
+# -----------------------------------------------------------------------------
+fileConfig:
+  serverFileSizeLimit: 512 # MB, globální strop
+  avatarSizeLimit: 4
+  fileTokenLimit: 100000
+
+  # POZOR: `default` NENÍ fallback pro všechno. LibreChat má vlastní base
+  # záznamy pro `agents`, `anthropic`, `assistants` a `azureAssistants`,
+  # a custom endpoint padá zpátky na `agents`, ne na `default`. Kdyby tu byl
+  # jen `default`, tvoje hodnoty by neplatily nikde, kde reálně nahráváš.
+  endpoints:
+    agents:
+      fileLimit: 20
+      fileSizeLimit: 100
+      totalSizeLimit: 500
+    anthropic:
+      fileLimit: 20
+      fileSizeLimit: 100
+      totalSizeLimit: 500
+    default:
+      fileLimit: 20
+      fileSizeLimit: 100
+      totalSizeLimit: 500
+
+  clientImageResize:
+    enabled: true # zmenší obrázek v prohlížeči, než se pošle
+    maxWidth: 1920
+    maxHeight: 1920
+    quality: 0.85
+
+  # `ocr.supportedMimeTypes` a `text.supportedMimeTypes` tu vědomě NEJSOU.
+  # mergeFileConfig ty seznamy NAHRAZUJE, nemerguje, a default pro text je
+  # `/^[\w.-]+\/[\w.-]+$/`, tedy cokoliv. Vlastní seznam by tiše zakázal
+  # .py, .js, .css, .eml a u OCR docx/xlsx/pptx. Nezužuj to bez důvodu.
+
+# -----------------------------------------------------------------------------
+# MCP - jen síťová výjimka
+# -----------------------------------------------------------------------------
+# Tvých 9 MCP serverů je zadaných přes UI, takže žije v Mongu, ne tady.
+# Tenhle blok jen povoluje interní docker adresy, které by SSRF ochrana jinak
+# zablokovala (privátní IP a interní hostname jsou od 1.3.14 blokované).
+#
+# allowedDomains je STRIKTNÍ whitelist - jak ho nastavíš, všechno neuvedené
+# (včetně veřejných MCP endpointů) přestane fungovat. Proto allowedAddresses.
+mcpSettings:
+  allowedAddresses:
+    - 'ms365-mcp:3000' # Outlook MCP ve stejné docker síti
+    # - 'host.docker.internal:3001'    # kdyby něco běželo na hostu
+
+# -----------------------------------------------------------------------------
+# Rate limity
+# -----------------------------------------------------------------------------
+rateLimits:
+  fileUploads:
+    userMax: 100
+    userWindowInMinutes: 60
+  conversationsImport:
+    userMax: 10
+    userWindowInMinutes: 60
+
+# -----------------------------------------------------------------------------
+# Registrace
+# -----------------------------------------------------------------------------
+# Blok pod tímhle klíčem přepisuje bootstrap.sh z ALLOWED_REGISTRATION_DOMAINS.
+# Neškrtej řádek `registration:` - bootstrap na jeho absenci umře.
+registration:
+  socialLogins:
+    - 'google'
+    - 'openid'
+
+# =============================================================================
+# ENDPOINTY
+# =============================================================================
+# POZOR: `endpoints:` je .strict() - neznámý klíč tady je tvrdá chyba configu.
+# Naproti tomu překlep v top-level klíči (třeba `agents:` místo
+# `endpoints.agents`) projde bez chyby a prostě nic neudělá.
+endpoints:
+  # ---------------------------------------------------------------------------
+  # Společné pro všechny endpointy
+  # ---------------------------------------------------------------------------
+  all:
+    titleConvo: true
+    titleMethod: 'completion' # 'structured' padá na routovaných modelech
+    titleTiming: 'immediate'
+
+    # Titulky přes serverový klíč Anthropicu na nejlevnějším modelu.
+    # POZOR: titulky se čtou jako CELÝ objekt - `endpoints.all ?? endpoints[X]`.
+    # Dokud tu `all` existuje, jakékoli title* nastavení na jednotlivém
+    # endpointu je nedosažitelné. Není to obecné pravidlo, platí pro titulky.
+    titleEndpoint: 'anthropic'
+    titleModel: 'claude-haiku-4-5-20251001'
+
+    # NEJDŮLEŽITĚJŠÍ ŘÁDEK PRO TEBE. Defaultně je výsledek MCP nástroje
+    # neomezený - jeden list_messages z WhatsAppu ti umí sežrat celý kontext.
+    # Tady je precedence OPAČNÁ než u titulků: per-endpoint vyhrává,
+    # `all` je fallback. Nic to zatím nepřebíjí, takže 50000 platí.
+    maxToolResultChars: 50000
+
+    streamRate: 25 # adaptivní vyhlazování streamu
+
+  # ---------------------------------------------------------------------------
+  # Agenti
+  # ---------------------------------------------------------------------------
+  agents:
+    recursionLimit: 50 # default je taky 50, uvádím pro přehled
+    maxRecursionLimit: 100 # strop, který si smíš nastavit v UI
+    disableBuilder: false
+
+    maxCitations: 30
+    maxCitationsPerFile: 7
+    minRelevanceScore: 0.45
+
+    # Pojistky proti utržené smyčce
+    maxToolCallArgBytes: 131072
+    maxDeltaEventsPerTurn: 100000
+
+    skills:
+      maxCatalogSkills: 30
+
+    # Schopnosti. Prvních 14 je default, uvádím je explicitně, aby bylo vidět,
+    # co je zapnuté. programmatic_tools / stateful_code_sessions /
+    # run_in_background jsou opt-in a POTŘEBUJÍ běžící Code Interpreter -
+    # dokud ho nenasadíš, nechej je zakomentované.
+    capabilities:
+      - 'deferred_tools' # líné načítání nástrojů - klíčové při 9 MCP serverech
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'subagents'
+      - 'actions'
+      - 'context'
+      - 'skills'
+      - 'memory'
+      - 'ask_user_question'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+      # - 'tool_intents'            # přidává popis záměru DO schématu nástroje,
+      #                             # tedy tokeny navíc. Zapínej cíleně, ne globálně.
+      # - 'programmatic_tools'      # vyžaduje Code Interpreter + Tool Call Server
+      # - 'stateful_code_sessions'  # vyžaduje Code Interpreter
+      # - 'run_in_background'       # vyžaduje Code Interpreter
+
+    # Human-in-the-loop pro nástroje. Vzhledem k tomu, že máš napojený Gmail,
+    # Outlook a WhatsApp, tohle je pojistka proti tomu, aby agent poslal zprávu
+    # bez tvého odsouhlasení. `deny` vyhrává vždycky, i v režimu bypass.
+    # FORMÁT VZORŮ: NE `mcp:server:tool`. To je zdědělá notace z
+    # librechat.example.yaml, která tady nematchuje NIC. Skutečné jméno
+    # nástroje je `{tool}_mcp_{server}`, matchuje se ankrovaným globem
+    # (`*` -> `.*`) a jméno serveru je CASE SENSITIVE. Proto níž všude
+    # `_mcp_*` a ne konkrétní server.
+    #
+    # `allow: ['*']` je povinné. Bez něj `mode: default` propadne na "ask"
+    # u KAŽDÉHO volání - každé čtení z devíti MCP serverů by chtělo potvrzení.
+    # Pořadí priorit: deny > ask > allow.
+    #
+    # Po nasazení si ověř skutečná jména: v chatu si nech agenta vypsat
+    # dostupné nástroje, nebo `docker logs LibreChat-API | grep _mcp_`.
+    toolApproval:
+      enabled: true
+      mode: 'default'
+      allow:
+        - '*'
+      ask:
+        - 'send_message_mcp_*'
+        - 'send_file_mcp_*'
+        - 'send_audio_message_mcp_*'
+        - 'forward_mcp_*'
+        - 'reply_mcp_*'
+        - 'outlook_send_mail_mcp_*'
+        - 'outlook_send_draft_mcp_*'
+        - 'outlook_forward_mail_mcp_*'
+      deny:
+        - 'trash_thread_mcp_*'
+        - 'trash_message_mcp_*'
+        - 'outlook_trash_thread_mcp_*'
+      reason: 'Tohle odešle něco navenek. Zkontroluj to, než to pustíš.'
+
+    # Přežití běhu přes restart
+    checkpointer:
+      type: 'mongo'
+      ttl: 86400
+
+    # Popisky činnosti ("hledám na webu...") stojí extra volání modelu.
+    # Levný model + strop, jinak to nenápadně přifukuje účet.
+    activityLabel: true
+    activityEndpoint: 'anthropic'
+    activityModel: 'claude-haiku-4-5-20251001'
+    activityMaxPerRun: 20
+    activityCharLimit: 600
+
+  # ---------------------------------------------------------------------------
+  # Vlastní endpointy
+  # ---------------------------------------------------------------------------
+  # Hned za tenhle řádek si bootstrap.sh vkládá své deploy-managed endpointy
+  # (Kimi + "OpenRouter (own key)"). Nesahej na odsazení `  custom:`.
+  custom:
+    - name: 'OpenRouter'
+      apiKey: '${OPENROUTER_KEY}'
+      baseURL: 'https://openrouter.ai/api/v1'
+      # Pozor: env proměnná se musí jmenovat OPENROUTER_KEY.
+      # Jako OPENROUTER_API_KEY by přesměrovala i vestavěný OpenAI endpoint.
+      headers:
+        x-librechat-body-parentmessageid: '{{LIBRECHAT_BODY_PARENTMESSAGEID}}'
+
+      # Kurátorovaný seznam místo 420 modelů z /v1/models.
+      # fetch: false je ta jediná věc, která nabídku zkrátí -
+      # žádný `exclude` ani regex filtr v schématu neexistuje.
+      models:
+        fetch: false
+        default:
+          # --- těžká váha
+          - 'anthropic/claude-opus-5' #  $5 / $25   1M ctx
+          - 'anthropic/claude-sonnet-5' #  $2 / $10   1M ctx  (denní tahač)
+          - 'openai/gpt-5.6-terra' #  $2 / $12   1M ctx  (druhý názor)
+          - 'google/gemini-3.1-pro-preview' #  $2 / $12   1M ctx  (audio, video)
+          - 'x-ai/grok-4.6' #  $2 / $6    500k ctx
+          # --- levné a rychlé
+          - 'google/gemini-3.7-flash' #  $0.38 / $1.88  multimodální
+          - 'openai/gpt-5.6-luna' #  $0.20 / $1.20
+          - 'deepseek/deepseek-v4-pro' #  $1.60 / $3.20
+          - 'deepseek/deepseek-v4-flash' #  $0.08 / $0.17  nejlevnější
+          - 'z-ai/glm-5.3' #  $1.40 / $4.40
+          # --- na titulky a pomocná volání
+          - 'google/gemini-3.5-flash-lite' #  $0.30 / $2.50
+
+      # titleModel tu záměrně není: `endpoints.all` má přednost nad
+      # jednotlivými endpointy, takže by to byl mrtvý config. Titulky řeší
+      # `all` výše (anthropic + haiku). Kdybys je chtěl přes OpenRouter,
+      # smaž titleEndpoint/titleModel z `all` a dej sem
+      # titleModel: 'google/gemini-3.5-flash-lite'
+      dropParams: ['stop'] # OpenRouter routuje modely s různými stop tokeny
+      modelDisplayLabel: 'OpenRouter'
+
+      # Ceny pro ukazatel nákladů v UI (USD za 1M tokenů, k 21. 8. 2026).
+      # Bez tohohle contextCost u routovaných modelů nic nespočítá.
+      tokenConfig:
+        anthropic/claude-opus-5:
+          prompt: 5.0
+          completion: 25.0
+          context: 1000000
+          cacheRead: 0.5
+          cacheWrite: 6.25
+        anthropic/claude-sonnet-5:
+          prompt: 2.0
+          completion: 10.0
+          context: 1000000
+          cacheRead: 0.2
+          cacheWrite: 2.5
+        openai/gpt-5.6-terra:
+          prompt: 2.0
+          completion: 12.0
+          context: 1050000
+          cacheRead: 0.2
+          cacheWrite: 2.5
+        openai/gpt-5.6-luna:
+          prompt: 0.2
+          completion: 1.2
+          context: 1050000
+          cacheRead: 0.02
+          cacheWrite: 0.25
+        google/gemini-3.1-pro-preview:
+          prompt: 2.0
+          completion: 12.0
+          context: 1048576
+          cacheRead: 0.2
+          cacheWrite: 0.375
+        google/gemini-3.7-flash:
+          prompt: 0.375
+          completion: 1.875
+          context: 1048576
+          cacheRead: 0.0375
+        google/gemini-3.5-flash-lite:
+          prompt: 0.3
+          completion: 2.5
+          context: 1048576
+          cacheRead: 0.03
+        deepseek/deepseek-v4-pro:
+          prompt: 1.6
+          completion: 3.2
+          context: 1048576
+          cacheRead: 0.135
+        deepseek/deepseek-v4-flash:
+          prompt: 0.0826
+          completion: 0.1652
+          context: 1048576
+          cacheRead: 0.0165
+        x-ai/grok-4.6:
+          prompt: 2.0
+          completion: 6.0
+          context: 500000
+          cacheRead: 0.5
+        z-ai/glm-5.3:
+          prompt: 1.4
+          completion: 4.4
+          context: 1048576
+          cacheRead: 0.26
+
+# =============================================================================
+# Co tady vědomě NENÍ
+# =============================================================================
+#  - groq / Mistral / Helicone / Portkey / Claude-Compatible: vzorové endpointy
+#    z librechat.example.yaml bez klíčů. Claude a GPT jedou jako vestavěné
+#    endpointy z ANTHROPIC_API_KEY a OPENAI_API_KEY, custom entry nepotřebují.
+#  - mcpServers: tvoje servery jsou zadané přes UI (žijou v Mongu). Přesun sem
+#    by dal navíc serverInstructions, chatMenu, startup a placeholdery
+#    {{LIBRECHAT_USER_*}}, ale musel bys je nejdřív z UI smazat, jinak budou
+#    dvakrát.
+#  - modelSpecs: seznam specs implicitně vypne modelSelect, parameters
+#    a presets, a `prioritize: true` (default!) pak vnucuje jeden spec.
+#    Na jednoho člověka + pár kolegů zbytečná klec.
+#  - balance / transactions: účtování kreditů. Zapneš, až bude uživatelů víc.
+#  - ocr (Mistral OCR): chybí klíč.
+#  - summarization / contextPruning: existuje, ale přesný tvar klíčů jsem
+#    neověřil, takže to sem nedávám naslepo.
