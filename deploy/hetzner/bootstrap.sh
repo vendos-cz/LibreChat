@@ -132,8 +132,30 @@ fi
 
 cd "$DEPLOY_DIR"
 
-if [ ! -f librechat.yaml ]; then
-  log "Seeding librechat.yaml from librechat.example.yaml"
+# librechat.yaml is gitignored upstream, so the version-controlled copy lives
+# beside this script as librechat.reference.yaml and is installed over the live
+# file on every deploy. That trades "manual edits on the server survive" for
+# "the config is in git and cannot drift" — the drift is what bit us: the live
+# file was still the upstream example, complete with librechat.ai ToS links,
+# five keyless demo endpoints and a duplicated Kimi entry.
+#
+# A timestamped backup is kept, and the copy is skipped when the file is already
+# identical so a redeploy does not litter the directory.
+if [ -f librechat.reference.yaml ]; then
+  if [ -f librechat.yaml ] && cmp -s librechat.reference.yaml librechat.yaml; then
+    log "librechat.yaml already matches librechat.reference.yaml"
+  else
+    if [ -f librechat.yaml ]; then
+      backup="librechat.yaml.bak-$(date +%Y%m%d-%H%M%S)"
+      cp librechat.yaml "$backup"
+      log "Installing librechat.reference.yaml (previous kept as $backup)"
+    else
+      log "Installing librechat.reference.yaml"
+    fi
+    cp librechat.reference.yaml librechat.yaml
+  fi
+elif [ ! -f librechat.yaml ]; then
+  log "No librechat.reference.yaml — seeding from librechat.example.yaml"
   cp "$APP_DIR/librechat.example.yaml" librechat.yaml
 fi
 
@@ -283,6 +305,40 @@ fi
 for key in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET MEILI_MASTER_KEY; do
   [ -n "$(current_env "$key")" ] || die "$key is empty in .env — set it before deploying."
 done
+
+# Non-secret .env defaults this deployment wants but .env.example does not ship.
+# Written on every run so they cannot silently drift back. Deliberately absent:
+# anything that can lock the operator out (ALLOW_EMAIL_LOGIN,
+# ALLOW_UNVERIFIED_EMAIL_LOGIN, ALLOW_PASSWORD_RESET) and anything secret —
+# those stay in GitHub Secrets and are handled by the block above.
+log "Applying non-secret .env defaults"
+# MeiliSearch runs as a container, but config 1.3.14 flipped SEARCH's default
+# to false, so nothing was ever searched. MEILI_MASTER_KEY is already generated.
+set_env SEARCH true
+# chat-rag-api is the "lite" image: remote embeddings only, so OpenAI it is.
+set_env EMBEDDINGS_PROVIDER openai
+set_env EMBEDDINGS_MODEL text-embedding-3-small
+set_env CHUNK_SIZE 1500
+set_env CHUNK_OVERLAP 100
+set_env RAG_USE_FULL_CONTEXT false
+# Heartbeats so Caddy does not drop the connection while a PDF is OCR'd.
+set_env FILE_UPLOAD_SSE_ENABLED true
+# Keep-alive must exceed the proxy's idle timeout or streams get cut.
+set_env HTTP_KEEP_ALIVE_TIMEOUT_MS 70000
+set_env HTTP_REQUEST_TIMEOUT_MS 300000
+# 15 minutes of session is needlessly hostile for a handful of known users.
+set_env SESSION_EXPIRY '1000 * 60 * 60'
+set_env REFRESH_TOKEN_EXPIRY '(1000 * 60 * 60 * 24) * 30'
+set_env LIMIT_CONCURRENT_MESSAGES true
+set_env CONCURRENT_MESSAGE_MAX 3
+set_env LIMIT_MESSAGE_IP true
+set_env MESSAGE_IP_MAX 60
+set_env MESSAGE_IP_WINDOW 1
+set_env BAN_VIOLATIONS true
+set_env FILE_USAGE_USER_MAX 200
+set_env FILE_USAGE_USER_WINDOW 15
+set_env NO_INDEX true
+set_env TRUST_PROXY 1
 
 # An unset DOMAIN must not move a live deployment onto its bare IP. OAuth
 # callback URLs are built from DOMAIN_SERVER, so rewriting it silently breaks

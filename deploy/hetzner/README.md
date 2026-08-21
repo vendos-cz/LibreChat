@@ -103,6 +103,18 @@ redeploy that does not pass it cannot tear a proxy-mode server off its proxy.
 Moving back to LibreChat's own Caddy is therefore deliberate: clear
 `PROXY_NETWORK` in `.env` on the server first, then redeploy.
 
+## Non-secret `.env` defaults
+
+`bootstrap.sh` writes a block of non-secret settings into `.env` on every run,
+so they cannot drift back to the `.env.example` values: `SEARCH=true` (config
+1.3.14 flipped the default to `false`, which silently disabled MeiliSearch),
+the `EMBEDDINGS_*` / `CHUNK_*` / `RAG_USE_FULL_CONTEXT` group, keep-alive and
+request timeouts above Caddy's idle timeout, a one-hour session with a 30-day
+refresh token, and the IP/concurrency rate limits. Anything that could lock the
+operator out — `ALLOW_EMAIL_LOGIN`, `ALLOW_UNVERIFIED_EMAIL_LOGIN`,
+`ALLOW_PASSWORD_RESET` — is deliberately left alone, and secrets stay in GitHub
+Secrets.
+
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the
@@ -146,7 +158,8 @@ current value alone.
 | `OPENAI_API_KEY` | Provider key |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `KIMI_API_KEY` | Moonshot/Kimi key. Setting it also adds the Kimi endpoint to `librechat.yaml`; clearing it removes the endpoint again |
-| `OPENROUTER_KEY` | Shared OpenRouter credit. The endpoint that reads it is the one upstream's example already ships |
+| `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls — conversation titles, the memory agent — can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
+| `SERPER_API_KEY` | Web search provider. Referenced by the `webSearch` block in `librechat.reference.yaml`, which ships commented out — uncomment it, `interface.webSearch` and `web_search` in `defaultPinnedTools` once the key exists |
 
 | Variable | Notes |
 |---|---|
@@ -166,10 +179,31 @@ leaving the rest of the file (including the unrelated `allowedDomains` keys unde
 `actions` and `mcpServers`) untouched. Clearing the value leaves the file alone
 rather than removing the restriction.
 
+**Where `librechat.yaml` comes from.** Upstream gitignores `librechat.yaml`, so
+the version-controlled copy lives here as `librechat.reference.yaml` and
+`bootstrap.sh` installs it over the live file on **every** deploy, keeping the
+previous one as `librechat.yaml.bak-<timestamp>`. Editing the file on the server
+therefore buys you a restart-fast change that the next deploy discards — put the
+change in `librechat.reference.yaml` too. Delete the reference file and the old
+behaviour returns: seed once from `librechat.example.yaml`, never replace.
+
+This replaced seed-once because the drift was real. The live config had stayed
+the upstream example for months: `librechat.ai` terms-of-service links, five
+demo endpoints with no keys behind them, and a Kimi entry duplicated by an
+older marker format.
+
+Two ordering facts matter if you change any of this. The install happens
+*before* `set_allowed_domains` and `set_managed_endpoints` run, so those two
+patch the freshly installed file — which is why the reference file must keep a
+bare `registration:` line and a two-space `  custom:` line, and must **not**
+carry the `# >>> deploy-managed endpoints` markers itself. And because the
+workflow pipes `bootstrap.sh` from the *runner's* checkout while the server
+checks out `$BRANCH` separately, deploying a branch whose `bootstrap.sh` differs
+from `main` means dispatching the workflow on that same branch.
+
 **Adding a model provider.** A secret on its own does nothing: the key has to
 reach the server's `.env` *and* an endpoint has to reference it in
-`librechat.yaml`, which is seeded once from `librechat.example.yaml` and then
-never replaced. Kimi shows how both halves are wired — everything the deploy
+`librechat.reference.yaml`. Kimi shows how both halves are wired — everything the deploy
 adds lives inside one `# >>> deploy-managed endpoints` marker pair, so the
 endpoints upstream ships in the same list are never touched, and an entry is
 written only while its credential is configured, so a menu item cannot outlive
@@ -202,6 +236,14 @@ docker compose restart api
 docker compose down               # stop (volumes survive)
 ```
 
+Switching `SEARCH` from `false` to `true` does not backfill the index. If older
+conversations do not turn up in search, reset the sync flags and restart:
+
+```bash
+docker exec LibreChat-API npm run reset-meili-sync
+docker restart LibreChat-API
+```
+
 ### Backup
 
 The state worth backing up lives in the `librechat_mongo-data` (conversations,
@@ -226,3 +268,10 @@ docker run --rm -v librechat_mongo-data:/data -v "$PWD:/backup" alpine \
 **Streaming responses arrive all at once** — the Caddy config disables response
 buffering (`flush_interval -1`); a proxy or CDN in front of Caddy is the usual
 culprit.
+
+**A `librechat.yaml` change did nothing** — the file is installed from
+`librechat.reference.yaml` on every deploy, so a server-side edit may have been
+overwritten. Check `librechat.yaml.bak-*` for what was replaced. Note also that
+most `interface:` toggles are written into the Mongo role documents at every
+start, so an Admin Panel change to one of those keys reverts on restart unless
+the key is removed from the reference file.
