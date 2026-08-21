@@ -149,6 +149,60 @@ memory:
       temperature: 0.2
 
 # -----------------------------------------------------------------------------
+# Kontext: prořezávání starých výsledků nástrojů
+# -----------------------------------------------------------------------------
+# POZOR, tohle je důležité: sumarizace je defaultně ZAPNUTÁ. Bez tohohle bloku
+# LibreChat při přetečení kontextu volá model navíc, aby si udělal souhrn -
+# a platí se to z tvého klíče. `run.ts`: `enabled: config?.enabled !== false`.
+#
+# A druhá věc, kterou dokumentace neříká: `contextPruning` se přeskočí, když je
+# sumarizace zapnutá. V SDK je to jediné volání `applyContextPruning` podmíněné
+# `summarizationEnabled !== true`. Takže `enabled: true` + `contextPruning` je
+# no-op. Buď jedno, nebo druhé.
+#
+# Volím prořezávání: žádná volání modelu navíc, deterministické, a míří přesně
+# na můj problém - staré výsledky z devíti MCP serverů, které už nikdo nečte.
+# Cena je, že se detail starých volání nástrojů ztratí (nahradí se placeholderem)
+# místo aby se shrnul. Kdybys chtěl shrnování, přepni `enabled: true` a celý
+# `contextPruning` smaž - jinak platíš za souhrny a prořezávání neběží.
+summarization:
+  enabled: false
+  contextPruning:
+    enabled: true
+    keepLastAssistants: 3 # poslední 3 odpovědi asistenta se nesahají
+    softTrimRatio: 0.3 # od 30 % věku výše zkrátit na hlavu + patu
+    hardClearRatio: 0.5 # od 50 % věku výše zahodit obsah úplně
+    # KLÍČOVÉ: default je 50000, tedy přesně můj maxToolResultChars. Nic by
+    # se nikdy neprořezalo, protože žádný výsledek toho stropu nedosáhne.
+    minPrunableToolChars: 8000
+
+# -----------------------------------------------------------------------------
+# Hlas (diktování a čtení nahlas)
+# -----------------------------------------------------------------------------
+# Běží na Web Speech API v prohlížeči, takže **žádný klíč**. Funguje to i bez
+# tohohle bloku - klientské defaulty už jsou browser a zapnuto. Blok je tu jen
+# proto, aby nový prohlížeč začal s češtinou.
+#
+# Dvě věci, na které nesahej:
+#   - `stt:` ani `tts:` tu NESMÍ být, ani prázdné. `!!{}` je true, takže by to
+#     zapnulo příznak "externí engine" a nabídlo rozbitou volbu bez providera.
+#   - `automaticPlayback` musí zůstat false. StreamAudio se renderuje bez
+#     kontroly engine a volal by /api/files/speech/tts, kde není provider.
+#
+# Pozor: tyhle hodnoty platí jen pro prohlížeč, který ještě nemá nic
+# v localStorage. Tvůj prohlížeč si drží vlastní nastavení ze Settings → Speech.
+speech:
+  speechTab:
+    speechToText:
+      engineSTT: browser
+      languageSTT: cs # 'cs-CZ' taky funguje, ale není v UI rozbalovátku
+      autoTranscribeAudio: false
+      autoSendText: -1 # -1 = neposílat automaticky
+    textToSpeech:
+      engineTTS: browser
+      automaticPlayback: false
+
+# -----------------------------------------------------------------------------
 # Web search
 # -----------------------------------------------------------------------------
 # Tři vrstvy: provider (povinný) -> scraper (volitelný) -> reranker (volitelný).
@@ -505,8 +559,8 @@ endpoints:
 #    Na jednoho člověka + pár kolegů zbytečná klec.
 #  - balance / transactions: účtování kreditů. Zapneš, až bude uživatelů víc.
 #  - ocr (Mistral OCR): chybí klíč.
-#  - summarization / contextPruning: existuje, ale přesný tvar klíčů jsem
-#    neověřil, takže to sem nedávám naslepo.
+#  - contextPruning.softTrim / .hardClear: dokumentace je uvádí, ale ve schématu
+#    1.3.14 NEJSOU a loader je zahodí. SDK je umí, jen se k němu nedostanou.
 #  - obrázkové nástroje se v yamlu nekonfigurují vůbec - jsou to pluginy
 #    řízené proměnnými v .env (IMAGE_GEN_OAI_API_KEY, GEMINI_IMAGE_MODEL, ...)
 #    a přidávají se konkrétnímu agentovi v Agent Builderu. Yaml řeší jen
