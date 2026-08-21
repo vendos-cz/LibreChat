@@ -323,7 +323,9 @@ set_env CHUNK_OVERLAP 100
 set_env RAG_USE_FULL_CONTEXT false
 # Heartbeats so Caddy does not drop the connection while a PDF is OCR'd.
 set_env FILE_UPLOAD_SSE_ENABLED true
-# Keep-alive must exceed the proxy's idle timeout or streams get cut.
+# Keep-alive must exceed the proxy's idle timeout or streams get cut. The
+# request timeout also has to clear an image generation, which at high quality
+# routinely runs past 60s (discussion #7492 is proxies timing that out).
 set_env HTTP_KEEP_ALIVE_TIMEOUT_MS 70000
 set_env HTTP_REQUEST_TIMEOUT_MS 300000
 # 15 minutes of session is needlessly hostile for a handful of known users.
@@ -399,12 +401,39 @@ fi
 # current value rather than reverting to the example default.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
                 ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY OPENROUTER_KEY \
-                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+                SERPER_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
   set_env "$override" "$override_value"
   log "Applied $override from the deploy environment"
 done
+
+# gpt-image-1 is reached through IMAGE_GEN_OAI_API_KEY, and OpenAIImageTools.js
+# resolves that variable alone - there is no fallback to OPENAI_API_KEY. A
+# deployment with a perfectly good OpenAI key therefore gets no image tools at
+# all, and the failure is silent: loadTools catches the init error, logs
+# "Error loading tool image_gen_oai:", and the agent simply never sees the tool.
+#
+# Mirroring the key we already have avoids a second secret for the same
+# credential. Placed after the override loop so it picks up a key the deploy
+# just delivered. A value set deliberately is never clobbered, and the literal
+# "user_provided" counts as unset because loadAuthValues skips it and falls
+# through to each user's own key.
+image_key="$(current_env IMAGE_GEN_OAI_API_KEY)"
+case "$image_key" in
+  '' | user_provided)
+    openai_key="$(current_env OPENAI_API_KEY)"
+    if [ -n "$openai_key" ] && [ "$openai_key" != "user_provided" ]; then
+      set_env IMAGE_GEN_OAI_API_KEY "$openai_key"
+      log "IMAGE_GEN_OAI_API_KEY mirrored from OPENAI_API_KEY (enables image tools)"
+    else
+      log "No usable OPENAI_API_KEY - image tools will ask each user for a key"
+    fi
+    ;;
+  *)
+    log "IMAGE_GEN_OAI_API_KEY already set explicitly - left alone"
+    ;;
+esac
 
 # GPT-5.6 rejects function tools alongside reasoning_effort on
 # /v1/chat/completions. LibreChat switches such requests to /v1/responses by
