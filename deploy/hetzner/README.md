@@ -115,6 +115,60 @@ operator out — `ALLOW_EMAIL_LOGIN`, `ALLOW_UNVERIFIED_EMAIL_LOGIN`,
 `ALLOW_PASSWORD_RESET` — is deliberately left alone, and secrets stay in GitHub
 Secrets.
 
+It also mirrors `OPENAI_API_KEY` into `IMAGE_GEN_OAI_API_KEY` — see below.
+
+## Image generation
+
+Nothing about this lives in `librechat.yaml`. Image tools are plugins driven by
+`.env`, added per agent in the UI.
+
+**The key.** `OpenAIImageTools.js` resolves `IMAGE_GEN_OAI_API_KEY` and nothing
+else — there is no fallback to `OPENAI_API_KEY`, and the manifest authField
+carries no `||` alternates the way `dalle`'s `DALLE3_API_KEY||DALLE_API_KEY`
+does. It is the same OpenAI credential either way, so `bootstrap.sh` mirrors the
+key already in `.env` rather than asking for a second secret holding a copy of
+it. A value set deliberately is never clobbered, and the literal
+`user_provided` counts as unset, because `loadAuthValues` skips it and falls
+through to each user's own key.
+
+**It is agents-only.** Both `OpenAIImageTools.js` and `GeminiImageGen.js` throw
+`This tool is only available for agents`, and `TEphemeralAgent` — the mechanism
+behind the prompt-bar tool row — does not list image tools at all. So there is
+no point putting them in `interface.defaultPinnedTools`. The path is: Agents
+endpoint → Agent Builder → Tools → add "OpenAI Image Tools" → **save the
+agent** → chat with that agent.
+
+**Diagnosing "the tool does nothing".** In that order:
+
+1. `docker logs LibreChat-API | grep 'Error loading tool image_gen_oai'` — a
+   missing or rejected key is caught by `loadTools` and logged, not surfaced.
+   The model simply never sees the tool.
+2. `endpoints.agents.capabilities` must contain `tools`. Without it
+   `ToolService` drops the whole plugin list and Agent Builder shows nothing.
+3. If `includedTools` is ever set in `librechat.yaml` it is a **strict
+   allowlist** and must then name `image_gen_oai` (which covers `image_edit_oai`
+   too, via `toolkitExpansion`). It is deliberately absent here.
+4. The tool row appears in Agent Builder **even with no key**, flagged
+   `needs_setup` — presence in the UI proves nothing about the key.
+5. `gpt-image-1` requires a **verified** OpenAI organisation. If the org behind
+   the key is unverified, the mirror is correct and the call still fails
+   provider-side.
+
+**Two config settings that exist only because of image tools.**
+`imageOutputType` is `png`, not `webp`: `image_edit_oai` appends no
+`output_format` to its multipart body but wraps the result as
+`data:image/${imageOutputType}`, so webp produces a `.webp` file with MIME
+`image/webp` carrying PNG bytes, and `resizeImageBuffer` never calls
+`toFormat()` to correct it. And `fileConfig.imageGeneration.percentage: 100`
+overrides the `'high'` default, which caps the short side at 768 — a 1024×1024
+generation was being stored as 768×768 with nothing saying so. Only
+`percentage` is set: it is checked first and ignores `px`.
+
+**Storage.** `fileStrategy` is the default `local`, which writes to
+`client/public/images` — mounted as the named volume `librechat-images`, so
+generated images survive a container replacement. Losing that mount means
+broken image links for every past generation.
+
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the
@@ -130,8 +184,20 @@ pull the file out from under the running shell.)
 
 ### From GitHub Actions
 
-`.github/workflows/deploy-hetzner.yml` does the same thing over SSH via
-**Actions → Deploy to Hetzner → Run workflow**. Required repository secrets:
+`.github/workflows/deploy-hetzner.yml` deploys on **push to the `deploy`
+branch**, and also still offers **Actions → Deploy to Hetzner → Run workflow**.
+Nothing else deploys: a commit to `main` never reaches the server. To release,
+fast-forward `deploy` to the commit you want live.
+
+**Push one commit per deploy.** The workflow pipes `bootstrap.sh` from the
+*runner's* checkout while the server runs its own `git fetch`, so the script and
+the tree it operates on come from whatever each side saw at its own moment. Two
+pushes seconds apart therefore let an older script run against a newer tree —
+observed live: the tracked config was installed but a mirror step added in the
+newer `bootstrap.sh` was not, because the run that reached the server was still
+carrying the previous commit's script. Batch related changes into one commit.
+
+Required repository secrets:
 
 | Secret | Required | Notes |
 |---|---|---|
@@ -154,11 +220,11 @@ current value alone.
 
 | Secret | Notes |
 |---|---|
-| `ANTHROPIC_API_KEY` | Provider key |
-| `OPENAI_API_KEY` | Provider key |
+| `ANTHROPIC_API_KEY` | Provider key. Also what the memory agent and conversation titles run on |
+| `OPENAI_API_KEY` | Provider key. Also mirrored into `IMAGE_GEN_OAI_API_KEY` |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `KIMI_API_KEY` | Moonshot/Kimi key. Setting it also adds the Kimi endpoint to `librechat.yaml`; clearing it removes the endpoint again |
-| `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls — conversation titles, the memory agent — can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
+| `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
 | `SERPER_API_KEY` | Web search provider. Referenced by the `webSearch` block in `librechat.reference.yaml`, which ships commented out — uncomment it, `interface.webSearch` and `web_search` in `defaultPinnedTools` once the key exists |
 
 | Variable | Notes |
@@ -168,6 +234,22 @@ current value alone.
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
 | `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
+
+### Confirming what is actually deployed
+
+`https://<domain>/api/config` is public and includes `buildInfo`:
+
+```bash
+curl -s https://chat.example.com/api/config | jq .buildInfo
+# { "commit": "da972a9", "branch": "deploy", "buildDate": "2026-08-21T14:09:34Z" }
+```
+
+That is a better signal than an Actions log, which reports what was attempted
+rather than what is running. `BUILD_COMMIT` / `BUILD_BRANCH` / `BUILD_DATE` are
+written by `bootstrap.sh` **after** the config-install block, so a `buildInfo`
+naming the expected commit also proves the run got past installing
+`librechat.reference.yaml`. `buildDate` changes on every run, which is how to
+tell a fresh deploy from a stale one at an unchanged commit.
 
 **Who can sign in.** Social login applies no domain restriction of its own: with
 `registration.allowedDomains` unset in `librechat.yaml`, anyone whose Google
@@ -248,8 +330,9 @@ docker restart LibreChat-API
 
 The state worth backing up lives in the `librechat_mongo-data` (conversations,
 users) and `librechat_librechat-uploads` (uploaded files) volumes, plus
-`.env`, which holds `CREDS_KEY`/`CREDS_IV` — **without those two, stored
-credentials cannot be decrypted.**
+`librechat_librechat-images` (generated images) and `.env`, which holds
+`CREDS_KEY`/`CREDS_IV` — **without those two, stored credentials cannot be
+decrypted.**
 
 ```bash
 docker run --rm -v librechat_mongo-data:/data -v "$PWD:/backup" alpine \
@@ -268,6 +351,11 @@ docker run --rm -v librechat_mongo-data:/data -v "$PWD:/backup" alpine \
 **Streaming responses arrive all at once** — the Caddy config disables response
 buffering (`flush_interval -1`); a proxy or CDN in front of Caddy is the usual
 culprit.
+
+**Image generation aborts partway** — high-quality `gpt-image-1` calls routinely
+run past 60 s. The bundled Caddyfile does not impose a read timeout, but any
+proxy or CDN in front of it may; `HTTP_REQUEST_TIMEOUT_MS` is set to 300000 on
+the app side.
 
 **A `librechat.yaml` change did nothing** — the file is installed from
 `librechat.reference.yaml` on every deploy, so a server-side edit may have been

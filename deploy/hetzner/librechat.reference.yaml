@@ -29,7 +29,13 @@ version: 1.3.14
 # restart kontejneru stačí.
 cache: true
 
-imageOutputType: 'webp' # menší soubory než png, plná podpora v UI
+# PNG, ne webp. image_edit_oai posílá do OpenAI multipart BEZ output_format,
+# ale výsledek pak zabalí jako `data:image/<imageOutputType>` - u webp se
+# soubor uloží s příponou .webp a MIME image/webp, zatímco bajty jsou PNG.
+# Prohlížeč to většinou zobrazí, ale opakovaná editace toho obrázku se
+# pravděpodobně rozbije. Gemini image tool imageOutputType navíc ignoruje
+# úplně a vždycky dělá PNG.
+imageOutputType: 'png'
 secureImageLinks: true # lokálně hostované obrázky nejsou veřejně dosažitelné
 
 # -----------------------------------------------------------------------------
@@ -94,7 +100,10 @@ interface:
   marketplace:
     use: false # veřejný katalog agentů nepotřebuješ
 
-  # Co má být předpíchnuté v liště nástrojů u nové konverzace
+  # Co má být předpíchnuté v liště nástrojů u nové konverzace.
+  # Obrázkové nástroje sem NEPATŘÍ - jsou dostupné jen agentům, ne v běžném
+  # chatu (OpenAIImageTools.js: "This tool is only available for agents"),
+  # a TEphemeralAgent je do prompt bar lišty nepouští.
   defaultPinnedTools:
     - 'artifacts'
     - 'mcp'
@@ -170,12 +179,20 @@ memory:
 #     - 'firecrawl-api:3002'
 
 # -----------------------------------------------------------------------------
-# Soubory a RAG
+# Soubory, RAG a generované obrázky
 # -----------------------------------------------------------------------------
 fileConfig:
   serverFileSizeLimit: 512 # MB, globální strop
   avatarSizeLimit: 4
   fileTokenLimit: 100000
+
+  # Bez tohohle bloku platí default 'high', který generovaný obrázek zmenší na
+  # 768 px na kratší straně - z 1024x1024 od gpt-image-1 se uloží 768x768 a
+  # nikde to není vidět. `percentage: 100` = nativní rozlišení.
+  # POZOR: `percentage` se kontroluje první a přebije `px`. V oficiálním
+  # librechat.example.yaml jsou uvedené oba, což mate - `px` je tam mrtvý.
+  imageGeneration:
+    percentage: 100
 
   # POZOR: `default` NENÍ fallback pro všechno. LibreChat má vlastní base
   # záznamy pro `agents`, `anthropic`, `assistants` a `azureAssistants`,
@@ -294,6 +311,9 @@ endpoints:
     # co je zapnuté. programmatic_tools / stateful_code_sessions /
     # run_in_background jsou opt-in a POTŘEBUJÍ běžící Code Interpreter -
     # dokud ho nenasadíš, nechej je zakomentované.
+    #
+    # `tools` je zároveň to, co zpřístupňuje obrázkové nástroje - bez něj
+    # ToolService celý seznam pluginů zahodí a v Agent Builderu nic není.
     capabilities:
       - 'deferred_tools' # líné načítání nástrojů - klíčové při 9 MCP serverech
       - 'execute_code'
@@ -487,3 +507,9 @@ endpoints:
 #  - ocr (Mistral OCR): chybí klíč.
 #  - summarization / contextPruning: existuje, ale přesný tvar klíčů jsem
 #    neověřil, takže to sem nedávám naslepo.
+#  - obrázkové nástroje se v yamlu nekonfigurují vůbec - jsou to pluginy
+#    řízené proměnnými v .env (IMAGE_GEN_OAI_API_KEY, GEMINI_IMAGE_MODEL, ...)
+#    a přidávají se konkrétnímu agentovi v Agent Builderu. Yaml řeší jen
+#    dostupnost přes `endpoints.agents.capabilities: [tools]` a případný
+#    `includedTools`, který tu záměrně není - je to striktní allowlist a
+#    nejčastější důvod, proč nástroj v UI chybí.
