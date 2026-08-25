@@ -223,16 +223,18 @@ current value alone.
 | `ANTHROPIC_API_KEY` | Provider key. Also what the memory agent and conversation titles run on |
 | `OPENAI_API_KEY` | Provider key. Also mirrored into `IMAGE_GEN_OAI_API_KEY` |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_KEY` | Gemini key shared by everyone. `.env.example` ships `GOOGLE_KEY=user_provided`, so without this secret the Google endpoint is still offered and asks every user for their own key |
 | `KIMI_API_KEY` | Moonshot/Kimi key. Setting it also adds the Kimi endpoint to `librechat.yaml`; clearing it removes the endpoint again |
 | `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
-| `SERPER_API_KEY` | Web search provider. Referenced by the `webSearch` block in `librechat.reference.yaml`, which ships commented out — uncomment it, `interface.webSearch` and `web_search` in `defaultPinnedTools` once the key exists |
+| `SERPER_API_KEY` | Web search provider, and required for web search at all. Read by the `webSearch` block in `librechat.reference.yaml` |
+| `FIRECRAWL_API_KEY` | Optional scraper for web search. Without it bootstrap strips the `firecrawl` lines from `librechat.yaml`, so scraping falls back to Serper instead of LibreChat demanding a key from every user |
 
 | Variable | Notes |
 |---|---|
 | `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
-| `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves |
+| `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves. Set it to `false` to take that entry away again |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 ### Confirming what is actually deployed
