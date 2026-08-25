@@ -67,6 +67,16 @@ jobs:
           # Shared OpenRouter credit for everyone. The endpoint that reads it
           # is the one upstream's example already ships.
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          # Gemini. .env.example ships GOOGLE_KEY=user_provided, so the Google
+          # endpoint is already offered and asks every user for their own key.
+          # Setting this secret replaces that with one shared key for everyone.
+          GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
+          # Web search. Serper is the provider and is required; Firecrawl is the
+          # scraper and is optional — without its key bootstrap.sh drops the
+          # firecrawl lines so scraping falls to Serper instead of prompting
+          # every user for a key.
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           # Additionally offer an OpenRouter entry each user keys themselves.
           # A custom endpoint cannot do both on one entry, so this is a second.
           OPENROUTER_USER_KEYS: ${{ vars.OPENROUTER_USER_KEYS || 'true' }}
@@ -97,6 +107,9 @@ jobs:
              OPENAI_API_KEY='$OPENAI_API_KEY' \
              KIMI_API_KEY='$KIMI_API_KEY' \
              OPENROUTER_KEY='$OPENROUTER_KEY' \
+             GOOGLE_KEY='$GOOGLE_KEY' \
+             SERPER_API_KEY='$SERPER_API_KEY' \
+             FIRECRAWL_API_KEY='$FIRECRAWL_API_KEY' \
              OPENROUTER_USER_KEYS='$OPENROUTER_USER_KEYS' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
              GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
