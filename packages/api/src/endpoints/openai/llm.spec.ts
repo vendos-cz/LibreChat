@@ -729,7 +729,11 @@ describe('getOpenAILLMConfig', () => {
       },
     );
 
-    it('should NOT default to Responses API without reasoning params', () => {
+    /** Omitting reasoning_effort does not avoid the 400: probed against the live
+     *  API, a tools request without the parameter fails identically and still
+     *  names reasoning_effort, because the model carries a server-side default.
+     *  Tools are bound after config time, so the path cannot wait to find out. */
+    it('should default to Responses API even without reasoning params', () => {
       const result = getOpenAILLMConfig({
         apiKey: 'test-api-key',
         streaming: true,
@@ -739,8 +743,49 @@ describe('getOpenAILLMConfig', () => {
         },
       });
 
-      expect(result.llmConfig).not.toHaveProperty('useResponsesApi');
+      expect(result.llmConfig).toHaveProperty('useResponsesApi', true);
       expect(result.llmConfig).not.toHaveProperty('reasoning');
+    });
+
+    it('should default to Responses API when reasoning_effort is unset', () => {
+      const result = getOpenAILLMConfig({
+        apiKey: 'test-api-key',
+        streaming: true,
+        endpoint: EModelEndpoint.openAI,
+        modelOptions: {
+          model: 'gpt-5.6-terra',
+          reasoning_effort: ReasoningEffort.unset,
+        },
+      });
+
+      expect(result.llmConfig).toHaveProperty('useResponsesApi', true);
+    });
+
+    it.each(['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6'])(
+      'should default to Responses API for %s with no reasoning params at all',
+      (model) => {
+        const result = getOpenAILLMConfig({
+          apiKey: 'test-api-key',
+          streaming: true,
+          endpoint: EModelEndpoint.openAI,
+          modelOptions: { model },
+        });
+
+        expect(result.llmConfig).toHaveProperty('useResponsesApi', true);
+      },
+    );
+
+    it('should NOT default to Responses API for a non-5.6 model without reasoning params', () => {
+      const result = getOpenAILLMConfig({
+        apiKey: 'test-api-key',
+        streaming: true,
+        endpoint: EModelEndpoint.openAI,
+        modelOptions: {
+          model: 'gpt-4o',
+        },
+      });
+
+      expect(result.llmConfig).not.toHaveProperty('useResponsesApi');
     });
 
     it('should NOT default to Responses API when reasoning_effort is none', () => {

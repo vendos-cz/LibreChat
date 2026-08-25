@@ -121,15 +121,23 @@ function isOpenAIEndpoint(endpoint?: EModelEndpoint | string | null): boolean {
 }
 
 /**
- * GPT-5.6 models reject function tools combined with `reasoning_effort` in
- * `/v1/chat/completions` (400: "To use function tools, use /v1/responses or
- * set reasoning_effort to 'none'"). Reasoning without tools still works on
- * Chat Completions, but tools are bound after config time, so GPT-5.6
- * reasoning requests default to the Responses API to avoid tool failures.
+ * GPT-5.6 models reject function tools in `/v1/chat/completions` (400:
+ * "Function tools with reasoning_effort are not supported for gpt-5.6 in
+ * /v1/chat/completions. To use function tools, use /v1/responses or set
+ * reasoning_effort to 'none'").
+ *
+ * Sending no `reasoning_effort` does not avoid it. Probed against the live API:
+ * a tools request with the parameter omitted entirely returns the same 400,
+ * still naming `reasoning_effort` as the offending param — the model carries a
+ * server-side default. Reasoning without tools is fine on Chat Completions, but
+ * tools are bound after config time, so every GPT-5.6 request has to assume
+ * they are coming.
+ *
+ * `none` is the one exception, being the escape the provider's own error names.
  */
 const responsesApiRequiredPattern = /\bgpt-5\.6\b/;
 
-function requiresResponsesApiForReasoning({
+function requiresResponsesApi({
   model,
   reasoningEffort,
 }: {
@@ -139,11 +147,7 @@ function requiresResponsesApiForReasoning({
   if (typeof model !== 'string' || !responsesApiRequiredPattern.test(model)) {
     return false;
   }
-  return (
-    reasoningEffort != null &&
-    reasoningEffort !== ReasoningEffort.unset &&
-    reasoningEffort !== ReasoningEffort.none
-  );
+  return reasoningEffort !== ReasoningEffort.none;
 }
 
 /**
@@ -766,8 +770,8 @@ export function getOpenAILLMConfig({
   }
 
   /**
-   * Default GPT-5.6 reasoning requests to the Responses API unless explicitly set.
-   * Reads `llmConfig.model` (reflects `addParams` overrides) and skips when
+   * Default GPT-5.6 requests to the Responses API unless explicitly set. Reads
+   * `llmConfig.model` (reflects `addParams` overrides) and skips when
    * `dropParams` removes `reasoning_effort` later anyway (`'reasoning'` only
    * drops the nested object, not the flat param) or opts out of the Responses
    * API entirely. Limited to first-party OpenAI: OpenRouter, custom gateways
@@ -784,7 +788,7 @@ export function getOpenAILLMConfig({
     reasoningFormat !== ReasoningParameterFormat.disabled &&
     llmConfig.useResponsesApi == null &&
     !responsesApiOptedOut &&
-    requiresResponsesApiForReasoning({ model: llmConfig.model, reasoningEffort })
+    requiresResponsesApi({ model: llmConfig.model, reasoningEffort })
   ) {
     llmConfig.useResponsesApi = true;
   }

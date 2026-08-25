@@ -19,7 +19,9 @@ on:
         required: false
         default: 'medium'
         type: choice
-        options: ['medium', 'low', 'high', 'minimal']
+        # 'none' is the escape OpenAI's own error message names, and the only
+        # remaining untested claim behind the Responses API default.
+        options: ['medium', 'low', 'high', 'minimal', 'none']
 
 concurrency:
   group: hetzner-probe-openai
