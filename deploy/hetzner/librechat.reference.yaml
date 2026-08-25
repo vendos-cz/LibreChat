@@ -85,8 +85,7 @@ interface:
     rate: 21.5 # USD -> CZK, uprav podle kurzu
 
   runCode: true # tlačítko "Run code" u bloků kódu (potřebuje Code Interpreter)
-  # webSearch: true             # ZAPNOUT až bude SERPER_API_KEY (viz blok webSearch níž).
-  #                             # Zakomentované = oprávnění v Mongu se nechá, jak je.
+  webSearch: true # web search (blok webSearch níž, Serper + volitelně Firecrawl)
   fileSearch: true
   fileCitations: true
 
@@ -107,7 +106,7 @@ interface:
   defaultPinnedTools:
     - 'artifacts'
     - 'mcp'
-    # - 'web_search'            # přidat spolu se SERPER_API_KEY
+    - 'web_search'
 
   # Vlastní právní texty místo odkazů na librechat.ai.
   # Vyhoď oba bloky, dokud nemáš na chat.nasdum.cz co odkazovat.
@@ -153,30 +152,33 @@ memory:
 # -----------------------------------------------------------------------------
 # Tři vrstvy: provider (povinný) -> scraper (volitelný) -> reranker (volitelný).
 #
-# CELÝ BLOK JE ZAKOMENTOVANÝ, protože SERPER_API_KEY zatím není v .env
-# a bez klíče by hledání vracelo 401. Až klíč přidáš jako GitHub Secret,
-# odkomentuj tenhle blok, `interface.webSearch` a 'web_search'
-# v defaultPinnedTools - a nasaď znovu.
-# Serper má free tier 2 500 dotazů a umí i scraping. https://serper.dev
+# Klíče píše bootstrap.sh do .env z GitHub Secrets:
+#   SERPER_API_KEY    - provider, povinný. Free tier 2 500 dotazů, serper.dev
+#   FIRECRAWL_API_KEY - scraper, volitelný. Lepší na JS-heavy weby a PDF.
 #
-# webSearch:
-#   searchProvider: 'serper'
-#   serperApiKey: '${SERPER_API_KEY}'
+# Chybějící klíč NEVRACÍ 401: loadWebSearchAuth (packages/api/src/web/web.ts)
+# označí kategorii jako USER_PROVIDED a LibreChat si klíč vyžádá od uživatele.
+#
+# POZOR na scraper: fallback na Serper nastane jen když `scraperProvider`
+# vůbec neurčíš. Jak ho pojmenuješ a klíč nedodáš, kategorie SCRAPERS neprojde
+# autentizací a klíč začne chtít po uživatelích. Proto ty dva firecrawl řádky
+# bootstrap.sh z nainstalovaného librechat.yaml odstraní, dokud
+# FIRECRAWL_API_KEY není v .env - hledání pak scrapuje Serperem.
+#
+# `allowedAddresses` tu vědomě NENÍ - je to výjimka ze SSRF ochrany pro
+# privátní adresy, potřebná jen u self-hosted SearXNG/Firecrawlu v Dockeru.
+# Cloudová API jsou veřejné adresy a projdou samy.
+webSearch:
+  searchProvider: 'serper'
+  serperApiKey: '${SERPER_API_KEY}'
 
-#   # Scraper: když ho neurčíš, LibreChat vezme první, ke kterému má klíč -
-#   # tedy Serper. Vlastní vestavěný scraper se nepoužije. Firecrawl je navíc.
-#   scraperProvider: 'firecrawl'   # POZOR: klíč je scraperProvider, ne scraperType
-#   firecrawlApiKey: '${FIRECRAWL_API_KEY}'
+  # POZOR: klíč je scraperProvider, ne scraperType.
+  scraperProvider: 'firecrawl'
+  firecrawlApiKey: '${FIRECRAWL_API_KEY}'
 
-#   rerankerType: 'none'
-#   scraperTimeout: 10000
-#   safeSearch: 0            # 0=off, 1=moderate (default), 2=strict
-
-#   # Od 1.3.14 se privátní a loopback adresy blokují (SSRF ochrana).
-#   # Kdyby sis pustil SearXNG/Firecrawl v Dockeru, musí být tady:
-#   allowedAddresses:
-#     - 'searxng:8080'
-#     - 'firecrawl-api:3002'
+  rerankerType: 'none' # 'jina' nebo 'cohere' by chtěly další klíč
+  scraperTimeout: 10000
+  safeSearch: 0 # 0=off, 1=moderate (default), 2=strict
 
 # -----------------------------------------------------------------------------
 # Soubory, RAG a generované obrázky
