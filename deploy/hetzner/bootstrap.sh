@@ -46,6 +46,8 @@ FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}"
 # leaves the machine.
 BACKUP_SSH_TARGET="${BACKUP_SSH_TARGET:-}"
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
+# Managed storage frequently listens somewhere other than 22.
+BACKUP_SSH_PORT="${BACKUP_SSH_PORT:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -553,6 +555,7 @@ fi
 # happening on the days nobody deploys. The off-site destination lives in
 # /etc, not in the checkout, because `reset --hard` above would take it out.
 BACKUP_ENV_FILE=/etc/librechat-backup.env
+BACKUP_SSH_KEY_FILE=/root/.ssh/librechat-backup
 
 install_backup_timer() {
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -561,13 +564,30 @@ install_backup_timer() {
   fi
 
   if [ -n "$BACKUP_SSH_TARGET" ]; then
+    # The GitHub deploy key opens GitHub -> server. Server -> storage is the
+    # other direction and needs a key of its own, or setting the target would
+    # only ever produce "Permission denied (publickey)".
+    if [ ! -f "$BACKUP_SSH_KEY_FILE" ]; then
+      log "Generating an outbound backup key"
+      ssh-keygen -q -t ed25519 -N '' -C 'librechat-backup' -f "$BACKUP_SSH_KEY_FILE"
+    fi
+
     umask 077
     {
       printf 'BACKUP_SSH_TARGET=%s\n' "$BACKUP_SSH_TARGET"
+      printf 'BACKUP_SSH_KEY=%s\n' "$BACKUP_SSH_KEY_FILE"
+      [ -z "$BACKUP_SSH_PORT" ] || printf 'BACKUP_SSH_PORT=%s\n' "$BACKUP_SSH_PORT"
       [ -z "$BACKUP_PASSPHRASE" ] || printf 'BACKUP_PASSPHRASE=%s\n' "$BACKUP_PASSPHRASE"
     } > "$BACKUP_ENV_FILE"
     umask 022
     log "Off-site backup target written to $BACKUP_ENV_FILE"
+
+    # The public half is not a secret and is the one thing that cannot be
+    # automated from here: it has to be authorised on the storage side.
+    printf '\n  Authorise this key on the backup destination:\n\n    %s\n' \
+      "$(cat "$BACKUP_SSH_KEY_FILE.pub")"
+    printf '\n  Until it is authorised, backups still run and stay local, and the\n'
+    printf '  nightly unit fails loudly on the upload.\n'
   fi
 
   cat > /etc/systemd/system/librechat-backup.service <<UNIT

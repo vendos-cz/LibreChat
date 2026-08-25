@@ -86,6 +86,7 @@ jobs:
           # encrypted with before it leaves the server. Unset keeps backups
           # local, which does not survive losing the server.
           BACKUP_SSH_TARGET: ${{ vars.BACKUP_SSH_TARGET }}
+          BACKUP_SSH_PORT: ${{ vars.BACKUP_SSH_PORT }}
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
           # Set to "true" to additionally offer an OpenRouter entry each user
           # keys themselves. A custom endpoint cannot do both on one entry, so
@@ -127,6 +128,7 @@ jobs:
              SERPER_API_KEY='$SERPER_API_KEY' \
              FIRECRAWL_API_KEY='$FIRECRAWL_API_KEY' \
              BACKUP_SSH_TARGET='$BACKUP_SSH_TARGET' \
+             BACKUP_SSH_PORT='$BACKUP_SSH_PORT' \
              BACKUP_PASSPHRASE='$BACKUP_PASSPHRASE' \
              OPENROUTER_USER_KEYS='$OPENROUTER_USER_KEYS' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \
