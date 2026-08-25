@@ -1,9 +1,8 @@
 name: Deploy to Hetzner
 
+# Deploys are deliberately manual. There is no push trigger: the repository is
+# a fork, so merging upstream into main would otherwise deploy it.
 on:
-  push:
-    branches:
-      - deploy
   workflow_dispatch:
     inputs:
       branch:
@@ -19,11 +18,11 @@ on:
         required: false
         default: ''
       allow_registration:
-        description: 'Open or close self-registration (leave unset to keep the current setting)'
+        description: 'Open or close self-registration'
         required: false
-        default: ''
+        default: 'keep'
         type: choice
-        options: ['', 'true', 'false']
+        options: ['keep', 'true', 'false']
 
 concurrency:
   group: deploy-hetzner
@@ -33,7 +32,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/hetzner-ssh
         with:
@@ -55,7 +54,13 @@ jobs:
           DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           PROXY_NETWORK: ${{ inputs.proxy_network || vars.HETZNER_PROXY_NETWORK }}
-          ALLOW_REGISTRATION: ${{ inputs.allow_registration }}
+          # An empty choice option is invalid per GitHub's schema, so "keep the
+          # current setting" is a named option, mapped back in the run step
+          # below to the empty string bootstrap.sh reads as leave-alone. The
+          # mapping is shell rather than a ${{ }} ternary on purpose: those
+          # hinge on how GitHub coerces the *string* "false" to a boolean, and
+          # getting that backwards here would silently open registration.
+          ALLOW_REGISTRATION_CHOICE: ${{ inputs.allow_registration }}
           # Optional: set these secrets to manage provider keys and Google
           # OAuth credentials from here instead of editing .env on the server.
           # Unset ones are left alone.
@@ -82,9 +87,10 @@ jobs:
           # local, which does not survive losing the server.
           BACKUP_SSH_TARGET: ${{ vars.BACKUP_SSH_TARGET }}
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
-          # Additionally offer an OpenRouter entry each user keys themselves.
-          # A custom endpoint cannot do both on one entry, so this is a second.
-          OPENROUTER_USER_KEYS: ${{ vars.OPENROUTER_USER_KEYS || 'true' }}
+          # Set to "true" to additionally offer an OpenRouter entry each user
+          # keys themselves. A custom endpoint cannot do both on one entry, so
+          # it has to be a second one. Unset means the entry is not offered.
+          OPENROUTER_USER_KEYS: ${{ vars.OPENROUTER_USER_KEYS }}
           # A Google client id is not confidential — it travels in the redirect
           # every signing-in browser sees — so it is defaulted here rather than
           # stored as a secret, where a truncated paste is invisible and
@@ -102,6 +108,11 @@ jobs:
           # left to a variable so forgetting the variable fails closed.
           ALLOWED_REGISTRATION_DOMAINS: ${{ vars.ALLOWED_REGISTRATION_DOMAINS || 'nasdum.cz' }}
         run: |
+          set -euo pipefail
+          ALLOW_REGISTRATION=""
+          [ "${ALLOW_REGISTRATION_CHOICE:-keep}" = "keep" ] \
+            || ALLOW_REGISTRATION="$ALLOW_REGISTRATION_CHOICE"
+
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
             "${USER_NAME:-root}@$HOST" \

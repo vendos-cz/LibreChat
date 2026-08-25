@@ -84,7 +84,7 @@ fi
 log "Installing base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git gnupg ufw ipset iproute2
+apt-get install -y -qq ca-certificates curl git gnupg ufw ipset iproute2 jq
 
 if ! command -v docker >/dev/null 2>&1; then
   log "Installing Docker Engine"
@@ -454,6 +454,15 @@ for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION 
                 GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
+  # Empty means "leave whatever is there alone", which is what makes an unset
+  # secret safe — but it also left no way to take a key back out, since
+  # deleting the secret is indistinguishable from never setting it. `none` is
+  # that way. No provider key or boolean flag has "none" as a legitimate value.
+  if [ "$override_value" = "none" ]; then
+    set_env "$override" ""
+    log "Cleared $override — the deploy environment says none"
+    continue
+  fi
   set_env "$override" "$override_value"
   log "Applied $override from the deploy environment"
 done
@@ -491,8 +500,8 @@ esac
 # isCanonicalOpenAIBaseURL false and the request keeps the failing path, with
 # nothing in the deploy output saying so. Report whether the override is set —
 # the name only, never the value, since these logs are world-readable.
-openai_base_override=unset
-[ -z "$(current_env OPENAI_REVERSE_PROXY)" ] || openai_base_override=set
+openai_base_override="unset"
+[ -z "$(current_env OPENAI_REVERSE_PROXY)" ] || openai_base_override="set"
 log "OPENAI_REVERSE_PROXY: $openai_base_override (set means GPT-5.6 reasoning keeps Chat Completions)"
 
 set_env BUILD_COMMIT "$(git -C "$APP_DIR" rev-parse --short HEAD)"

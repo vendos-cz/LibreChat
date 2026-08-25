@@ -9,11 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       apply:
-        description: 'Write the change (leave unset to report only)'
+        description: 'Write the change (off = report only)'
         required: false
-        default: ''
-        type: choice
-        options: ['', 'true']
+        default: false
+        type: boolean
 
 concurrency:
   group: hetzner-link-google
@@ -23,7 +22,7 @@ jobs:
   link:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/hetzner-ssh
         with:
@@ -39,7 +38,7 @@ jobs:
           HOST: ${{ secrets.HETZNER_HOST }}
           USER_NAME: ${{ secrets.HETZNER_USER }}
           PORT: ${{ secrets.HETZNER_SSH_PORT }}
-          APPLY: ${{ inputs.apply == 'true' && '1' || '' }}
+          APPLY: ${{ inputs.apply && '1' || '' }}
         run: |
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
