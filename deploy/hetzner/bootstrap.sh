@@ -34,6 +34,11 @@ KIMI_API_KEY="${KIMI_API_KEY:-}"
 # that secret is all a shared key needs. Set this to "true" to *also* offer a
 # second entry each user keys themselves.
 OPENROUTER_USER_KEYS="${OPENROUTER_USER_KEYS:-}"
+# Firecrawl scrapes pages for web search. Naming it in librechat.yaml without a
+# key does not fall back to Serper — it makes LibreChat demand the key from each
+# user — so the config is stripped back when this is empty. Declared here
+# because the stripping reads it directly and the script runs under `set -u`.
+FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -179,6 +184,21 @@ if [ -f librechat.reference.yaml ]; then
 elif [ ! -f librechat.yaml ]; then
   log "No librechat.reference.yaml — seeding from librechat.example.yaml"
   cp "$APP_DIR/librechat.example.yaml" librechat.yaml
+fi
+
+# The reference config names Firecrawl as the scraper, which is right when its
+# key is delivered and wrong when it is not: loadWebSearchAuth fails the
+# SCRAPERS category and LibreChat starts asking every user for a Firecrawl key.
+# The documented fallback to the search provider's own scraping only happens
+# when `scraperProvider` is absent, so absent is what it has to be.
+if [ -z "$FIRECRAWL_API_KEY" ] && [ -f librechat.yaml ]; then
+  if grep -qE "^  (scraperProvider|firecrawlApiKey):" librechat.yaml; then
+    grep -vE "^  (scraperProvider|firecrawlApiKey):" librechat.yaml > librechat.yaml.new
+    mv librechat.yaml.new librechat.yaml
+    log "FIRECRAWL_API_KEY unset — dropped the firecrawl scraper (Serper will scrape)"
+  fi
+elif [ -n "$FIRECRAWL_API_KEY" ]; then
+  log "Firecrawl scraper configured"
 fi
 
 # registration.allowedDomains lives only in librechat.yaml — there is no env
@@ -423,7 +443,8 @@ fi
 # current value rather than reverting to the example default.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
                 ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY OPENROUTER_KEY \
-                SERPER_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+                SERPER_API_KEY FIRECRAWL_API_KEY \
+                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
   set_env "$override" "$override_value"
