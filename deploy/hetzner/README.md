@@ -239,6 +239,7 @@ that alone will not clear anything.
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
 | `OPENROUTER_USER_KEYS` | `true` also offers an "OpenRouter (own key)" entry each user keys themselves. Unset (the default) does not offer it |
 | `BACKUP_SSH_TARGET` | scp destination for the nightly backup, e.g. `u12345@u12345.your-storagebox.de:`. Unset keeps archives on the server, which does not survive losing the server |
+| `BACKUP_SSH_PORT` | Port for `BACKUP_SSH_TARGET` when it is not 22. Managed storage often is not |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 ### Confirming what is actually deployed
@@ -361,15 +362,39 @@ rather than falling back to tarring a live data directory — that produces an
 archive which may not replay, and finding that out during a restore is the
 worst possible time.
 
-**Off-site.** Unset, backups stay on the server, which covers a bad migration
-or a dropped collection but not the loss of the machine. Set the
-`BACKUP_SSH_TARGET` repository variable to an scp destination (a Hetzner
-Storage Box, `u12345@u12345.your-storagebox.de:`) and each archive is copied
-there too. The archive contains `.env` in the clear, so set the
-`BACKUP_PASSPHRASE` secret as well and only an encrypted copy leaves the
-server — **keep that passphrase in a password manager, because GitHub cannot
-show a secret back to you and the encrypted archives are worthless without
-it.**
+#### Off-site
+
+Unset, backups stay on the server, which covers a bad migration or a dropped
+collection but not the loss of the machine. Setting it up is four steps, and
+only the first cannot be done from the repository:
+
+1. Get storage reachable over ssh. A Hetzner Storage Box is the cheapest fit —
+   same datacentre, and `scp` needs no extra tooling. **Check which port it
+   listens on**; managed storage often does not use 22, and if yours does not,
+   set the `BACKUP_SSH_PORT` variable to it.
+2. Set the `BACKUP_SSH_TARGET` repository variable to the scp destination, e.g.
+   `u12345@u12345.your-storagebox.de:`, and deploy. The deploy generates an
+   outbound ed25519 key at `/root/.ssh/librechat-backup` if it does not exist
+   and **prints its public half in the log** — the GitHub deploy key opens
+   GitHub → server, which is the other direction and no use here.
+3. Authorise that public key on the storage side. This is the one manual step.
+4. Set the `BACKUP_PASSPHRASE` secret, so only an encrypted copy leaves the
+   server — the archive contains `.env` in the clear. **Keep that passphrase in
+   a password manager: GitHub cannot show a secret back to you, and the
+   encrypted archives are worthless without it.**
+
+Between steps 2 and 3 the nightly backup still runs and still keeps a local
+archive; only the upload fails, loudly. Note also that a failed upload does not
+stop rotation — otherwise a destination left broken would let the archives grow
+until they filled the disk, and a backup that causes the outage is worse than
+no backup.
+
+Do not use a git repository as the destination, private or not. The archive
+carries `.env` — every provider key, plus `CREDS_KEY`/`CREDS_IV` — and a commit
+is a one-way door: the history keeps it, every clone keeps it, and GitHub's push
+protection may well reject the push anyway. Beyond that, git keeps every version
+of an 8 MB binary forever with no rotation, and the account that runs the backup
+would also be the account that stores it.
 
 #### Restore
 

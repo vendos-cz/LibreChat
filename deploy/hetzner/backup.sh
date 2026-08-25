@@ -37,6 +37,8 @@ COMPOSE_PROJECT="${COMPOSE_PROJECT:-librechat}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/librechat/deploy/hetzner}"
 BACKUP_SSH_TARGET="${BACKUP_SSH_TARGET:-}"
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
+BACKUP_SSH_PORT="${BACKUP_SSH_PORT:-}"
+BACKUP_SSH_KEY="${BACKUP_SSH_KEY:-}"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -116,6 +118,7 @@ grep -q '^CREDS_KEY=.' "$stage/env" \
 log "Archive verified: $(du -h "$archive" | cut -f1)"
 printf '%s\n' "$listing" | awk '{ printf "    %-24s %10s\n", $NF, $3 }'
 
+upload_failed=
 if [ -n "$BACKUP_SSH_TARGET" ]; then
   outgoing="$archive"
   if [ -n "$BACKUP_PASSPHRASE" ]; then
@@ -126,15 +129,28 @@ if [ -n "$BACKUP_SSH_TARGET" ]; then
   else
     log "BACKUP_PASSPHRASE unset — shipping the archive unencrypted, .env included"
   fi
+
+  # Managed storage often listens on a non-default port and offers a shell too
+  # limited to read the landed file back, so the port is configurable and scp's
+  # own exit status is the check that the transfer completed.
+  scp_opts="-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+  [ -z "$BACKUP_SSH_PORT" ] || scp_opts="$scp_opts -P $BACKUP_SSH_PORT"
+  [ -z "$BACKUP_SSH_KEY" ] || scp_opts="$scp_opts -i $BACKUP_SSH_KEY"
+
   log "Copying to $BACKUP_SSH_TARGET"
-  scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-    "$outgoing" "$BACKUP_SSH_TARGET" \
-    || die "the off-site copy failed — the local archive is kept at $archive"
+  # shellcheck disable=SC2086 # scp_opts is a deliberate list of separate words
+  if ! scp $scp_opts "$outgoing" "$BACKUP_SSH_TARGET"; then
+    upload_failed=1
+    printf '\n\033[1;31mWARNING: the off-site copy failed. The local archive is kept at %s\033[0m\n' "$archive"
+  fi
 else
   log "BACKUP_SSH_TARGET unset — local copy only, this server is a single point of failure"
 fi
 
-# Rotate last, so a failure above never costs an older backup.
+# Rotate even when the upload failed. Exiting here instead would stop rotation
+# running for as long as the off-site destination stays broken, and the archives
+# would then grow until they filled the disk and took the app down with them —
+# a backup that causes the outage is worse than no backup.
 log "Keeping the newest $KEEP archives"
 # `ls` on a glob that matches nothing exits non-zero, and pipefail would then
 # fail the whole run right after a good backup.
@@ -143,5 +159,7 @@ log "Keeping the newest $KEEP archives"
       printf '    removing %s\n' "$stale"
       rm -f "$stale"
     done
+
+[ -z "$upload_failed" ] || die "the local backup succeeded but the off-site copy did not"
 
 log "Done — $archive"
