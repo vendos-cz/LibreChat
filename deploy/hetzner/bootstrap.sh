@@ -39,6 +39,13 @@ OPENROUTER_USER_KEYS="${OPENROUTER_USER_KEYS:-}"
 # user — so the config is stripped back when this is empty. Declared here
 # because the stripping reads it directly and the script runs under `set -u`.
 FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}"
+# scp destination for the nightly backup, e.g. u12345@u12345.your-storagebox.de:
+# Unset keeps backups on this server only, which covers a bad migration or a
+# dropped collection but not the loss of the server itself. The archive holds
+# .env in the clear, so set BACKUP_PASSPHRASE too and only an encrypted copy
+# leaves the machine.
+BACKUP_SSH_TARGET="${BACKUP_SSH_TARGET:-}"
+BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -532,6 +539,63 @@ if [ -n "$PROXY_NETWORK" ]; then
   This server's $(network_hints)"
   log "Running behind an external proxy on network $PROXY_NETWORK (no own Caddy)"
 fi
+
+# Backups run from a systemd timer rather than from this script, so they keep
+# happening on the days nobody deploys. The off-site destination lives in
+# /etc, not in the checkout, because `reset --hard` above would take it out.
+BACKUP_ENV_FILE=/etc/librechat-backup.env
+
+install_backup_timer() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    log "No systemd here — backups not scheduled, run backup.sh from cron instead"
+    return 0
+  fi
+
+  if [ -n "$BACKUP_SSH_TARGET" ]; then
+    umask 077
+    {
+      printf 'BACKUP_SSH_TARGET=%s\n' "$BACKUP_SSH_TARGET"
+      [ -z "$BACKUP_PASSPHRASE" ] || printf 'BACKUP_PASSPHRASE=%s\n' "$BACKUP_PASSPHRASE"
+    } > "$BACKUP_ENV_FILE"
+    umask 022
+    log "Off-site backup target written to $BACKUP_ENV_FILE"
+  fi
+
+  cat > /etc/systemd/system/librechat-backup.service <<UNIT
+[Unit]
+Description=Back up LibreChat (database, .env, uploads, images)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-$BACKUP_ENV_FILE
+ExecStart=$DEPLOY_DIR/backup.sh
+UNIT
+
+  # Persistent=true runs a missed backup once the server is back, which is the
+  # difference between a nightly backup and a backup on nights it happened to
+  # be up. The delay keeps it off the top of the hour.
+  cat > /etc/systemd/system/librechat-backup.timer <<'UNIT'
+[Unit]
+Description=Nightly LibreChat backup
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable --now librechat-backup.timer >/dev/null 2>&1 \
+    || log "WARNING: could not enable librechat-backup.timer"
+  log "Nightly backup timer installed ($(systemctl is-enabled librechat-backup.timer 2>/dev/null))"
+}
+
+install_backup_timer
 
 log "Building and starting the stack (first build takes ~10-15 min)"
 compose pull --ignore-buildable --quiet

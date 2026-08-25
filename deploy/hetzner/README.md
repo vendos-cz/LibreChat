@@ -228,6 +228,7 @@ current value alone.
 | `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
 | `SERPER_API_KEY` | Web search provider, and required for web search at all. Read by the `webSearch` block in `librechat.reference.yaml` |
 | `FIRECRAWL_API_KEY` | Optional scraper for web search. Without it bootstrap strips the `firecrawl` lines from `librechat.yaml`, so scraping falls back to Serper instead of LibreChat demanding a key from every user |
+| `BACKUP_PASSPHRASE` | Encrypts each backup archive before it leaves the server. Only meaningful with `BACKUP_SSH_TARGET` set. Keep a copy in a password manager — GitHub cannot show a secret back to you, and the encrypted archives are worthless without it |
 
 | Variable | Notes |
 |---|---|
@@ -235,6 +236,7 @@ current value alone.
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
 | `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves. Set it to `false` to take that entry away again |
+| `BACKUP_SSH_TARGET` | scp destination for the nightly backup, e.g. `u12345@u12345.your-storagebox.de:`. Unset keeps archives on the server, which does not survive losing the server |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 ### Confirming what is actually deployed
@@ -330,15 +332,86 @@ docker restart LibreChat-API
 
 ### Backup
 
-The state worth backing up lives in the `librechat_mongo-data` (conversations,
-users) and `librechat_librechat-uploads` (uploaded files) volumes, plus
-`librechat_librechat-images` (generated images) and `.env`, which holds
-`CREDS_KEY`/`CREDS_IV` — **without those two, stored credentials cannot be
-decrypted.**
+`backup.sh` runs nightly from the `librechat-backup.timer` systemd unit that
+`bootstrap.sh` installs, and writes a single verified archive to
+`/var/backups/librechat/`, keeping the newest 14. Take one on demand — before a
+risky change, or to check the plumbing — with the **Back up Hetzner now**
+workflow, which starts the same unit the timer does.
+
+Each archive holds four things:
+
+| Member | Why it has to be there |
+|---|---|
+| `env` | `CREDS_KEY`/`CREDS_IV`. Every user-provided API key in Mongo is encrypted with them, so **restoring Mongo without this file gets you a database of ciphertext.** Also the JWT secrets and every provider key |
+| `mongo.archive.gz` | `mongodump` of the `LibreChat` database — conversations, users, agents, memories, shared links |
+| `librechat-uploads.tar.gz` | attached files, and the source documents the RAG index was built from |
+| `librechat-images.tar.gz` | generated images, referenced from messages |
+
+Left out on purpose: `meili-data` and `pgdata` are indexes derived from the
+above and are cheaper to rebuild (`npm run reset-meili-sync`, and re-uploading
+to the RAG API) than to store.
+
+The script refuses to report success it cannot prove: it reads the finished
+archive back, requires `env` and `mongo.archive.gz` to be present and larger
+than a floor, and checks the copied `.env` still contains a `CREDS_KEY`. It
+also refuses to run at all if `mongodump` is missing from the Mongo container,
+rather than falling back to tarring a live data directory — that produces an
+archive which may not replay, and finding that out during a restore is the
+worst possible time.
+
+**Off-site.** Unset, backups stay on the server, which covers a bad migration
+or a dropped collection but not the loss of the machine. Set the
+`BACKUP_SSH_TARGET` repository variable to an scp destination (a Hetzner
+Storage Box, `u12345@u12345.your-storagebox.de:`) and each archive is copied
+there too. The archive contains `.env` in the clear, so set the
+`BACKUP_PASSPHRASE` secret as well and only an encrypted copy leaves the
+server — **keep that passphrase in a password manager, because GitHub cannot
+show a secret back to you and the encrypted archives are worthless without
+it.**
+
+#### Restore
+
+Untested restores are not backups, so run through this on a scratch server
+before you need it.
 
 ```bash
-docker run --rm -v librechat_mongo-data:/data -v "$PWD:/backup" alpine \
-  tar czf /backup/mongo-$(date +%F).tar.gz -C /data .
+cd /opt/librechat/deploy/hetzner
+mkdir -p /tmp/restore && tar xzf /var/backups/librechat/librechat-<stamp>.tar.gz -C /tmp/restore
+```
+
+If the archive is encrypted, decrypt it first:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -in librechat-<stamp>.tar.gz.enc \
+  -out librechat-<stamp>.tar.gz
+```
+
+Put `.env` back **first** — the credentials in Mongo are unreadable without it,
+and a partial restore that skips it looks like data loss:
+
+```bash
+cp /tmp/restore/env .env && chmod 600 .env
+docker compose up -d mongodb
+docker exec -i chat-mongodb mongorestore --archive --gzip --drop \
+  < /tmp/restore/mongo.archive.gz
+```
+
+`--drop` replaces each collection being restored, so restoring into a live
+database discards whatever is there now. That is what you want for a real
+restore and not what you want for a look around; on a scratch server, or with
+`--nsFrom`/`--nsTo` into another database name, for the latter.
+
+Then the file volumes, and the search index which is rebuilt rather than
+restored:
+
+```bash
+docker run --rm -v librechat_librechat-uploads:/data -v /tmp/restore:/in alpine \
+  sh -c 'rm -rf /data/* && tar xzf /in/librechat-uploads.tar.gz -C /data'
+docker run --rm -v librechat_librechat-images:/data -v /tmp/restore:/in alpine \
+  sh -c 'rm -rf /data/* && tar xzf /in/librechat-images.tar.gz -C /data'
+
+docker compose up -d
+docker exec LibreChat-API npm run reset-meili-sync
 ```
 
 ## Troubleshooting
