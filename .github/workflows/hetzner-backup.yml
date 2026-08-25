@@ -1,0 +1,60 @@
+name: Back up Hetzner now
+
+# Runs the same systemd unit the nightly timer runs, so this button tests the
+# real scheduled path rather than a parallel copy of it. Use it to take a
+# backup before a risky change, and to confirm the timer's plumbing works.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hetzner
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/hetzner-ssh
+        with:
+          ssh_key: ${{ secrets.HETZNER_SSH_KEY }}
+          host: ${{ secrets.HETZNER_HOST }}
+          port: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+          user: ${{ secrets.HETZNER_USER || 'root' }}
+
+      - name: Run the backup unit
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER_NAME: ${{ secrets.HETZNER_USER }}
+          PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+            -o BatchMode=yes -o ServerAliveInterval=30 \
+            "${USER_NAME:-root}@$HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          if ! systemctl list-unit-files librechat-backup.service >/dev/null 2>&1 \
+             || [ -z "$(systemctl show -p FragmentPath --value librechat-backup.service)" ]; then
+            echo "::error::librechat-backup.service is not installed. Deploy first — bootstrap.sh installs it."
+            exit 1
+          fi
+
+          echo "timer: $(systemctl is-enabled librechat-backup.timer 2>&1) / $(systemctl is-active librechat-backup.timer 2>&1)"
+          systemctl list-timers librechat-backup.timer --no-pager || true
+
+          # --wait makes systemctl return the unit's own exit status, so a failed
+          # backup fails this job instead of being buried in the journal.
+          rc=0
+          systemctl start --wait librechat-backup.service || rc=$?
+
+          echo
+          echo "=== backup log ==="
+          journalctl -u librechat-backup.service -n 200 --no-pager -o cat
+
+          echo
+          echo "=== archives on disk ==="
+          ls -lh /var/backups/librechat/ 2>/dev/null || echo "(none)"
+
+          exit "$rc"
+          REMOTE
