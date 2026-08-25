@@ -1,0 +1,61 @@
+name: Uptime
+
+# Nothing was watching the site, so an outage was discovered by someone trying
+# to use it. This is the cheap floor, not a real monitor: GitHub's scheduled
+# runs are best-effort and routinely fire late, and schedules are suspended
+# after 60 days without repository activity. It catches "it has been down since
+# last night", not "it blipped for 90 seconds".
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+jobs:
+  reachable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the site answers
+        env:
+          DOMAIN: ${{ secrets.HETZNER_DOMAIN }}
+        run: |
+          set -euo pipefail
+          [ -n "$DOMAIN" ] || { echo "::error::HETZNER_DOMAIN is not set, so there is nothing to check"; exit 1; }
+
+          # /api/config is public and is rendered by the app itself, so a 200
+          # here means more than a TCP connect or a proxy's error page would:
+          # the api container is up and serving its own config.
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 \
+                    "https://$DOMAIN/api/config" || echo 000)"
+
+          if [ "$code" != "200" ]; then
+            echo "::error::/api/config returned HTTP $code"
+            head -c 500 "$body" || true
+            exit 1
+          fi
+
+          # A 200 that is not the app's JSON means something else answered —
+          # another service holding the hostname, or a captive error page.
+          jq -e 'type == "object" and has("appTitle")' "$body" >/dev/null \
+            || { echo "::error::/api/config answered 200 but is not LibreChat config"; head -c 500 "$body"; exit 1; }
+
+          jq -r '"appTitle: \(.appTitle)"' "$body"
+          jq -c '.buildInfo // "no buildInfo"' "$body"
+
+      - name: Check the certificate is being renewed
+        env:
+          DOMAIN: ${{ secrets.HETZNER_DOMAIN }}
+        run: |
+          set -euo pipefail
+          # Caddy renews with 30 days left. Under 14 means renewal has been
+          # failing for two weeks, which stays silent until the day it is not.
+          end="$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null \
+                 | openssl x509 -noout -enddate | cut -d= -f2)"
+          [ -n "$end" ] || { echo "::error::could not read the certificate"; exit 1; }
+          days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+          echo "certificate expires in $days days"
+          [ "$days" -ge 14 ] || { echo "::error::certificate expires in $days days — renewal is failing"; exit 1; }

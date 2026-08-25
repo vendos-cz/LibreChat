@@ -216,7 +216,9 @@ deployment that never had a hostname.
 
 Settings the deploy can push into the server's `.env`, so they need no
 hand-editing over SSH. Each is applied only when set; an unset one leaves the
-current value alone.
+current value alone. To take a value back *out*, set it to the literal
+`none` — deleting a secret is indistinguishable from never having set one, so
+that alone will not clear anything.
 
 | Secret | Notes |
 |---|---|
@@ -235,7 +237,7 @@ current value alone.
 | `ALLOW_SOCIAL_LOGIN` | `true` to show the Google button — credentials alone do not |
 | `ALLOW_SOCIAL_REGISTRATION` | `true` to let a new account be created via Google |
 | `ALLOWED_REGISTRATION_DOMAINS` | Comma-separated email domains allowed to sign in; defaults to `nasdum.cz` in the workflow |
-| `OPENROUTER_USER_KEYS` | `true` (the workflow default) also offers an "OpenRouter (own key)" entry each user keys themselves. Set it to `false` to take that entry away again |
+| `OPENROUTER_USER_KEYS` | `true` also offers an "OpenRouter (own key)" entry each user keys themselves. Unset (the default) does not offer it |
 | `BACKUP_SSH_TARGET` | scp destination for the nightly backup, e.g. `u12345@u12345.your-storagebox.de:`. Unset keeps archives on the server, which does not survive losing the server |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 

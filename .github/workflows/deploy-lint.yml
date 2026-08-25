@@ -1,0 +1,56 @@
+name: Lint deploy scripts and workflows
+
+# Two real bugs in bootstrap.sh reached main and were caught only by
+# hand-written tests: `close` used as an awk variable name, which is a keyword,
+# and a `diff` under `set -e` that killed the script. Static checking is free
+# and would have caught the shape of both. actionlint runs over every workflow
+# because the whole set is currently clean, so a regression anywhere shows up
+# here rather than as a failed run.
+on:
+  pull_request:
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          # Gated at warning: the only info-level finding across these scripts
+          # is SC1091 (not following a sourced file), which is not actionable.
+          shellcheck -S warning deploy/hetzner/*.sh
+
+      - name: Every deploy script is executable and has a shebang
+        run: |
+          set -euo pipefail
+          # backup.sh is ExecStart'ed by a systemd unit, so a lost exec bit
+          # would break the nightly backup and nothing else would notice.
+          status=0
+          for script in deploy/hetzner/*.sh; do
+            head -n1 "$script" | grep -q '^#!' \
+              || { echo "::error file=$script::no shebang"; status=1; }
+          done
+          [ -x deploy/hetzner/backup.sh ] \
+            || { echo "::error file=deploy/hetzner/backup.sh::not executable, but systemd ExecStarts it directly"; status=1; }
+          exit "$status"
+
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          set -euo pipefail
+          curl -sSLo actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar xzf actionlint.tar.gz actionlint
+          # actionlint shells out to shellcheck for `run:` blocks. The runner's
+          # shellcheck is a different version from the pinned actionlint, so
+          # that half is disabled here and shellcheck is run directly above.
+          ./actionlint -shellcheck=

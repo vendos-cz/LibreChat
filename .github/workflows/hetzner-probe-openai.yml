@@ -1,0 +1,54 @@
+name: Probe OpenAI parameters
+
+# Agent calls to gpt-5.6 fail with a 400 that names the model rather than the
+# cause, and the leading explanation was ruled out — OPENAI_REVERSE_PROXY came
+# back unset, so LibreChat sees a canonical base URL. The api container's log
+# holds the answer but can contain what people typed, and this repository is
+# public, so nothing from it is printed. probe-openai.sh sends its own synthetic
+# requests instead and reports only status codes and the provider's own error
+# messages.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model id to probe'
+        required: false
+        default: 'gpt-5.6'
+      effort:
+        description: 'reasoning_effort value to send'
+        required: false
+        default: 'medium'
+        type: choice
+        options: ['medium', 'low', 'high', 'minimal']
+
+concurrency:
+  group: hetzner-probe-openai
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/hetzner-ssh
+        with:
+          ssh_key: ${{ secrets.HETZNER_SSH_KEY }}
+          host: ${{ secrets.HETZNER_HOST }}
+          port: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+          user: ${{ secrets.HETZNER_USER || 'root' }}
+
+      # Piped over ssh like bootstrap.sh, so the script the repo shows is the
+      # script that runs.
+      - name: Run the probe on the server
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER_NAME: ${{ secrets.HETZNER_USER }}
+          PORT: ${{ secrets.HETZNER_SSH_PORT }}
+          MODEL: ${{ inputs.model }}
+          EFFORT: ${{ inputs.effort }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
+            -o BatchMode=yes -o ServerAliveInterval=30 \
+            "${USER_NAME:-root}@$HOST" \
+            "MODEL='$MODEL' EFFORT='$EFFORT' bash -s" < deploy/hetzner/probe-openai.sh
