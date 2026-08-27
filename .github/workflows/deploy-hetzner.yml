@@ -87,6 +87,12 @@ jobs:
           # local, which does not survive losing the server.
           BACKUP_SSH_TARGET: ${{ vars.BACKUP_SSH_TARGET }}
           BACKUP_SSH_PORT: ${{ vars.BACKUP_SSH_PORT }}
+          # GitHub Releases as the off-site backup destination, taking
+          # precedence over BACKUP_SSH_TARGET when both are set. The token
+          # needs contents:write on BACKUP_GITHUB_REPO alone (fine-grained
+          # PAT), never a classic token with repo-wide scope.
+          BACKUP_GITHUB_REPO: ${{ vars.BACKUP_GITHUB_REPO }}
+          BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
           # Set to "true" to additionally offer an OpenRouter entry each user
           # keys themselves. A custom endpoint cannot do both on one entry, so
@@ -129,6 +135,8 @@ jobs:
              FIRECRAWL_API_KEY='$FIRECRAWL_API_KEY' \
              BACKUP_SSH_TARGET='$BACKUP_SSH_TARGET' \
              BACKUP_SSH_PORT='$BACKUP_SSH_PORT' \
+             BACKUP_GITHUB_REPO='$BACKUP_GITHUB_REPO' \
+             BACKUP_GITHUB_TOKEN='$BACKUP_GITHUB_TOKEN' \
              BACKUP_PASSPHRASE='$BACKUP_PASSPHRASE' \
              OPENROUTER_USER_KEYS='$OPENROUTER_USER_KEYS' \
              GOOGLE_CLIENT_ID='$GOOGLE_CLIENT_ID' \

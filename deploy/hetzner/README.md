@@ -230,7 +230,8 @@ that alone will not clear anything.
 | `OPENROUTER_KEY` | Shared OpenRouter credit, spent by the `OpenRouter` endpoint in `librechat.reference.yaml`. Also what server-side calls can reach; the per-user `OpenRouter (own key)` entry cannot be used for those |
 | `SERPER_API_KEY` | Web search provider, and required for web search at all. Read by the `webSearch` block in `librechat.reference.yaml` |
 | `FIRECRAWL_API_KEY` | Optional scraper for web search. Without it bootstrap strips the `firecrawl` lines from `librechat.yaml`, so scraping falls back to Serper instead of LibreChat demanding a key from every user |
-| `BACKUP_PASSPHRASE` | Encrypts each backup archive before it leaves the server. Only meaningful with `BACKUP_SSH_TARGET` set. Keep a copy in a password manager — GitHub cannot show a secret back to you, and the encrypted archives are worthless without it |
+| `BACKUP_PASSPHRASE` | Encrypts `.env` inside each backup archive (not the archive itself). Meaningful with either off-site backend set. Keep a copy in a password manager — GitHub cannot show a secret back to you, and without it the encrypted `.env` cannot be restored |
+| `BACKUP_GITHUB_TOKEN` | Fine-grained token, Contents: Read and write, scoped to `BACKUP_GITHUB_REPO` only. Takes precedence over the ssh path when both are set |
 
 | Variable | Notes |
 |---|---|
@@ -240,6 +241,7 @@ that alone will not clear anything.
 | `OPENROUTER_USER_KEYS` | `true` also offers an "OpenRouter (own key)" entry each user keys themselves. Unset (the default) does not offer it |
 | `BACKUP_SSH_TARGET` | scp destination for the nightly backup, e.g. `u12345@u12345.your-storagebox.de:`. Unset keeps archives on the server, which does not survive losing the server |
 | `BACKUP_SSH_PORT` | Port for `BACKUP_SSH_TARGET` when it is not 22. Managed storage often is not |
+| `BACKUP_GITHUB_REPO` | `owner/repo` of a private repository dedicated to backups. Each archive becomes a release, not a commit, so rotation can actually reclaim the space |
 | `GOOGLE_CLIENT_ID` | Overrides the client id defaulted in the workflow. Not a secret — it is in the redirect every signing-in browser sees, and keeping it in the workflow makes a truncated value reviewable instead of invisible |
 
 ### Confirming what is actually deployed
@@ -365,52 +367,92 @@ worst possible time.
 #### Off-site
 
 Unset, backups stay on the server, which covers a bad migration or a dropped
-collection but not the loss of the machine. Setting it up is four steps, and
-only the first cannot be done from the repository:
+collection but not the loss of the machine. Two backends, `BACKUP_GITHUB_REPO`
+taking precedence when both are set.
 
-1. Get storage reachable over ssh. A Hetzner Storage Box is the cheapest fit —
-   same datacentre, and `scp` needs no extra tooling. **Check which port it
-   listens on**; managed storage often does not use 22, and if yours does not,
-   set the `BACKUP_SSH_PORT` variable to it.
+**Commits are not an option, releases are.** A committed archive is permanent —
+the history keeps it, every clone keeps it, and push protection would likely
+reject it anyway since it carries `.env` in the clear. A release *asset* lives
+outside the object store: it can be deleted, so the repository does not grow,
+and rotation actually reclaims the space. `backup.sh` uses the release API, not
+a commit, and deletes both the release and its tag when it rotates one out.
+
+**GitHub Releases**
+
+1. Create a small **private** repository to hold nothing but backups, e.g.
+   `<org>/librechat-backups`. Keeping it separate means its access list is its
+   own, distinct from who can read the application's source.
+2. Create a **fine-grained personal access token** scoped to that one
+   repository only, with **Contents: Read and write** and nothing else. A
+   classic token with repo-wide scope would also reach every other repository
+   the account can see — avoid it here.
+3. Set the `BACKUP_GITHUB_REPO` repository variable to `owner/repo` and the
+   `BACKUP_GITHUB_TOKEN` secret to the token, then deploy. No manual step
+   remains — unlike the ssh path below, GitHub authorizes itself.
+4. Set the `BACKUP_PASSPHRASE` secret. Only `.env` inside the archive is
+   encrypted, not the archive itself, so the config and the dumps stay
+   readable at the destination while the credentials do not travel in the
+   clear. **Keep that passphrase in a password manager: GitHub cannot show a
+   secret back to you, and without it the encrypted `.env` cannot be
+   restored.**
+
+**scp, e.g. a Hetzner Storage Box** — use this instead if you would rather not
+hand a token to the repository at all.
+
+1. Get storage reachable over ssh. **Check which port it listens on**; managed
+   storage often does not use 22, and if yours does not, set the
+   `BACKUP_SSH_PORT` variable to it.
 2. Set the `BACKUP_SSH_TARGET` repository variable to the scp destination, e.g.
    `u12345@u12345.your-storagebox.de:`, and deploy. The deploy generates an
    outbound ed25519 key at `/root/.ssh/librechat-backup` if it does not exist
    and **prints its public half in the log** — the GitHub deploy key opens
    GitHub → server, which is the other direction and no use here.
 3. Authorise that public key on the storage side. This is the one manual step.
-4. Set the `BACKUP_PASSPHRASE` secret, so only an encrypted copy leaves the
-   server — the archive contains `.env` in the clear. **Keep that passphrase in
-   a password manager: GitHub cannot show a secret back to you, and the
-   encrypted archives are worthless without it.**
+4. Set `BACKUP_PASSPHRASE` as above.
 
-Between steps 2 and 3 the nightly backup still runs and still keeps a local
-archive; only the upload fails, loudly. Note also that a failed upload does not
-stop rotation — otherwise a destination left broken would let the archives grow
-until they filled the disk, and a backup that causes the outage is worse than
-no backup.
-
-Do not use a git repository as the destination, private or not. The archive
-carries `.env` — every provider key, plus `CREDS_KEY`/`CREDS_IV` — and a commit
-is a one-way door: the history keeps it, every clone keeps it, and GitHub's push
-protection may well reject the push anyway. Beyond that, git keeps every version
-of an 8 MB binary forever with no rotation, and the account that runs the backup
-would also be the account that stores it.
+Either way, between setting the destination and it being fully authorised, the
+nightly backup still runs and still keeps a local archive; only the upload
+fails, loudly. A failed upload also does not stop rotation — otherwise a
+destination left broken would let the archives grow until they filled the
+disk, and a backup that causes the outage is worse than no backup.
 
 #### Restore
 
 Untested restores are not backups, so run through this on a scratch server
 before you need it.
 
+The archive itself is never encrypted — only `.env` inside it may be, as
+`env.enc` instead of `env`, when `BACKUP_PASSPHRASE` was set. Get the archive
+onto the server first:
+
 ```bash
 cd /opt/librechat/deploy/hetzner
-mkdir -p /tmp/restore && tar xzf /var/backups/librechat/librechat-<stamp>.tar.gz -C /tmp/restore
+mkdir -p /tmp/restore
 ```
 
-If the archive is encrypted, decrypt it first:
+From a local archive:
 
 ```bash
-openssl enc -d -aes-256-cbc -pbkdf2 -in librechat-<stamp>.tar.gz.enc \
-  -out librechat-<stamp>.tar.gz
+tar xzf /var/backups/librechat/librechat-<stamp>.tar.gz -C /tmp/restore
+```
+
+From GitHub — the release tag is `backup-<stamp>`:
+
+```bash
+curl -sSL -H "Authorization: Bearer $BACKUP_GITHUB_TOKEN" \
+  -H 'Accept: application/octet-stream' \
+  "https://api.github.com/repos/<owner>/<repo>/releases/assets/<asset-id>" \
+  -o librechat-<stamp>.tar.gz
+tar xzf librechat-<stamp>.tar.gz -C /tmp/restore
+```
+
+(The asset id is on the release page, or `gh release view backup-<stamp> --repo
+<owner>/<repo> --json assets`.)
+
+If `/tmp/restore/env.enc` exists, decrypt it before continuing:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -in /tmp/restore/env.enc -out /tmp/restore/env
 ```
 
 Put `.env` back **first** — the credentials in Mongo are unreadable without it,
