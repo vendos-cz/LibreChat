@@ -48,6 +48,11 @@ BACKUP_SSH_TARGET="${BACKUP_SSH_TARGET:-}"
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 # Managed storage frequently listens somewhere other than 22.
 BACKUP_SSH_PORT="${BACKUP_SSH_PORT:-}"
+# GitHub Releases as the off-site destination instead of BACKUP_SSH_TARGET —
+# takes precedence when both are set. owner/repo plus a fine-grained token with
+# contents:write on that one repo, nothing broader.
+BACKUP_GITHUB_REPO="${BACKUP_GITHUB_REPO:-}"
+BACKUP_GITHUB_TOKEN="${BACKUP_GITHUB_TOKEN:-}"
 
 compose() {
   if [ -n "$PROXY_NETWORK" ]; then
@@ -563,31 +568,41 @@ install_backup_timer() {
     return 0
   fi
 
-  if [ -n "$BACKUP_SSH_TARGET" ]; then
-    # The GitHub deploy key opens GitHub -> server. Server -> storage is the
-    # other direction and needs a key of its own, or setting the target would
-    # only ever produce "Permission denied (publickey)".
-    if [ ! -f "$BACKUP_SSH_KEY_FILE" ]; then
-      log "Generating an outbound backup key"
-      ssh-keygen -q -t ed25519 -N '' -C 'librechat-backup' -f "$BACKUP_SSH_KEY_FILE"
-    fi
+  if [ -n "$BACKUP_GITHUB_REPO" ] && [ -n "$BACKUP_SSH_TARGET" ]; then
+    log "Both BACKUP_GITHUB_REPO and BACKUP_SSH_TARGET are set — backup.sh uses GitHub"
+  fi
 
+  if [ -n "$BACKUP_GITHUB_REPO" ] || [ -n "$BACKUP_SSH_TARGET" ]; then
     umask 077
     {
-      printf 'BACKUP_SSH_TARGET=%s\n' "$BACKUP_SSH_TARGET"
-      printf 'BACKUP_SSH_KEY=%s\n' "$BACKUP_SSH_KEY_FILE"
-      [ -z "$BACKUP_SSH_PORT" ] || printf 'BACKUP_SSH_PORT=%s\n' "$BACKUP_SSH_PORT"
+      if [ -n "$BACKUP_GITHUB_REPO" ]; then
+        printf 'BACKUP_GITHUB_REPO=%s\n' "$BACKUP_GITHUB_REPO"
+        printf 'BACKUP_GITHUB_TOKEN=%s\n' "$BACKUP_GITHUB_TOKEN"
+      else
+        # The GitHub deploy key opens GitHub -> server. Server -> storage is
+        # the other direction and needs a key of its own, or setting the
+        # target would only ever produce "Permission denied (publickey)".
+        if [ ! -f "$BACKUP_SSH_KEY_FILE" ]; then
+          log "Generating an outbound backup key"
+          ssh-keygen -q -t ed25519 -N '' -C 'librechat-backup' -f "$BACKUP_SSH_KEY_FILE"
+        fi
+        printf 'BACKUP_SSH_TARGET=%s\n' "$BACKUP_SSH_TARGET"
+        printf 'BACKUP_SSH_KEY=%s\n' "$BACKUP_SSH_KEY_FILE"
+        [ -z "$BACKUP_SSH_PORT" ] || printf 'BACKUP_SSH_PORT=%s\n' "$BACKUP_SSH_PORT"
+      fi
       [ -z "$BACKUP_PASSPHRASE" ] || printf 'BACKUP_PASSPHRASE=%s\n' "$BACKUP_PASSPHRASE"
     } > "$BACKUP_ENV_FILE"
     umask 022
     log "Off-site backup target written to $BACKUP_ENV_FILE"
 
-    # The public half is not a secret and is the one thing that cannot be
-    # automated from here: it has to be authorised on the storage side.
-    printf '\n  Authorise this key on the backup destination:\n\n    %s\n' \
-      "$(cat "$BACKUP_SSH_KEY_FILE.pub")"
-    printf '\n  Until it is authorised, backups still run and stay local, and the\n'
-    printf '  nightly unit fails loudly on the upload.\n'
+    if [ -z "$BACKUP_GITHUB_REPO" ]; then
+      # The public half is not a secret and is the one thing that cannot be
+      # automated from here: it has to be authorised on the storage side.
+      printf '\n  Authorise this key on the backup destination:\n\n    %s\n' \
+        "$(cat "$BACKUP_SSH_KEY_FILE.pub")"
+      printf '\n  Until it is authorised, backups still run and stay local, and the\n'
+      printf '  nightly unit fails loudly on the upload.\n'
+    fi
   fi
 
   cat > /etc/systemd/system/librechat-backup.service <<UNIT
