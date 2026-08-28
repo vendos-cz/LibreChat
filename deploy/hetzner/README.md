@@ -169,40 +169,6 @@ generation was being stored as 768×768 with nothing saying so. Only
 generated images survive a container replacement. Losing that mount means
 broken image links for every past generation.
 
-## Shared memory (Pamet-nasdum)
-
-`librechat.reference.yaml` declares an MCP server, `pamet-nasdum`, pointing at
-GitHub's remote MCP endpoint (`https://api.githubcopilot.com/mcp/`) rather than
-at a process this repo has to run. It gives agents the same private repo
-(`vendos-cz/Pamet-nasdum`) that Claude Code sessions read and write directly —
-one store, not a copy kept in sync.
-
-**Access is GitHub's, not LibreChat's.** The server has no shared credential:
-`customUserVars` with `source: user` means each person pastes their *own*
-fine-grained PAT into the tool's settings in the LibreChat UI (Settings → MCP
-Tools). What that token can do — read, write, or nothing — is whatever GitHub
-grants a token scoped to that repo; LibreChat enforces no permission of its
-own on top. Someone without a token, or without collaborator access to the
-repo, simply can't use the tool. This is deliberate: the alternative (one
-token in the config, shared by everyone who can attach the tool) would give
-every LibreChat user the same access level, with no way inside LibreChat to
-grant a colleague read and the owner write.
-
-**Confirming it merges rather than collides.** `mcpServers` from
-`librechat.yaml` and MCP servers added through the admin panel (this
-deployment already has 9, stored in Mongo, per the comment in the yaml) are
-combined by server name, not one replacing the other — verified by reading
-`deepMerge` in `packages/data-schemas/src/app/resolution.ts` rather than
-assumed. A new, uniquely-named key here is additive; it would only collide
-with a UI-configured server of the exact same name.
-
-**Setting up a token**: <https://github.com/settings/personal-access-tokens/new>
-— Repository access → *Only select repositories* → `vendos-cz/Pamet-nasdum`;
-Permissions → *Contents* → *Read and write* (or *Read* only, for anyone who
-should not write to it). Paste it into the tool's settings in LibreChat, not
-into `.env` or the yaml — that would make it the one shared token this section
-argues against.
-
 ## Redeploying
 
 Re-running `bootstrap.sh` is the redeploy path — it preserves `.env` and the
