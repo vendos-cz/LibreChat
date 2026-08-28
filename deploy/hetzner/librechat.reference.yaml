@@ -280,44 +280,6 @@ fileConfig:
   # .py, .js, .css, .eml a u OCR docx/xlsx/pptx. Nezužuj to bez důvodu.
 
 # -----------------------------------------------------------------------------
-# Sdílená paměť (Pamet-nasdum)
-# -----------------------------------------------------------------------------
-# Most mezi LibreChat agenty a Claude Code relacemi, které do stejného
-# privátního GitHub repa (vendos-cz/Pamet-nasdum) sahají napřímo. Ne kopie
-# paměti - jeden zdroj pravdy pro obě strany.
-#
-# Přístup neřeší LibreChat, ale GitHub. Server je additive podle jména
-# (mcpServers se s admin-panel servery slučuje po klíči, nepřepisuje je),
-# takže tohle nekoliduje s tvými 9 servery zadanými přes UI. customUserVars
-# se source: user místo sdíleného tokenu znamená, že si každý uživatel vloží
-# VLASTNÍ GitHub token - a co s ním smí (číst/zapisovat/nic), určuje výhradně
-# GitHub podle toho, čím ten token je a jaká má oprávnění k repu. Kolega bez
-# tokenu nebo bez přístupu k repu nástroj prostě nepoužije; LibreChat sama
-# žádné rozlišení nedělá.
-#
-# Token: https://github.com/settings/personal-access-tokens/new
-#   - Repository access: Only select repositories -> vendos-cz/Pamet-nasdum
-#   - Permissions: Contents -> Read and write (nebo jen Read, kdo nemá psát)
-# Vlož ho přes tlačítko u nástroje v LibreChatu (Nastavení -> Nástroje MCP),
-# ne sem do yamlu - to by ho udělalo sdíleným pro všechny se stejným právem.
-mcpServers:
-  pamet-nasdum:
-    type: streamable-http
-    url: 'https://api.githubcopilot.com/mcp/'
-    headers:
-      Authorization: 'Bearer {{PAMET_GITHUB_TOKEN}}'
-    customUserVars:
-      PAMET_GITHUB_TOKEN:
-        title: 'GitHub token pro Pamet-nasdum'
-        description: 'Fine-grained PAT jen pro vendos-cz/Pamet-nasdum (Contents). https://github.com/settings/personal-access-tokens/new'
-    chatMenu: true
-    serverInstructions: |
-      Tohle je sdílená dlouhodobá paměť firmy/uživatele, uložená jako soubory
-      v repu vendos-cz/Pamet-nasdum. Než něco přepíšeš, přečti aktuální obsah.
-      Nové poznámky přidávej, nemaž cizí bez vyžádání. Piš česky, stručně,
-      s datem.
-
-# -----------------------------------------------------------------------------
 # MCP - jen síťová výjimka
 # -----------------------------------------------------------------------------
 # Tvých 9 MCP serverů je zadaných přes UI, takže žije v Mongu, ne tady.
@@ -325,8 +287,7 @@ mcpServers:
 # zablokovala (privátní IP a interní hostname jsou od 1.3.14 blokované).
 #
 # allowedDomains je STRIKTNÍ whitelist - jak ho nastavíš, všechno neuvedené
-# (včetně veřejných MCP endpointů, tedy i api.githubcopilot.com výše)
-# přestane fungovat. Proto allowedAddresses.
+# (včetně veřejných MCP endpointů) přestane fungovat. Proto allowedAddresses.
 mcpSettings:
   allowedAddresses:
     - 'ms365-mcp:3000' # Outlook MCP ve stejné docker síti
