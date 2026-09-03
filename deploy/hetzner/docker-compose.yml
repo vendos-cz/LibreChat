@@ -18,6 +18,7 @@ services:
       - mongodb
       - meilisearch
       - rag_api
+      - ms365-mcp
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     env_file:
@@ -31,8 +32,8 @@ services:
       - LIBRECHAT_TEMP_CREDENTIALS_PATH=/app/data/.env.temp
       - RAG_PORT=${RAG_PORT:-8000}
       - RAG_API_URL=http://rag_api:${RAG_PORT:-8000}
-      - NO_PROXY=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,host.docker.internal
-      - no_proxy=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,host.docker.internal
+      - NO_PROXY=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,ms365-mcp,host.docker.internal
+      - no_proxy=localhost,127.0.0.1,::1,mongodb,meilisearch,rag_api,vectordb,ms365-mcp,host.docker.internal
     volumes:
       - ./librechat.yaml:/app/librechat.yaml:ro
       - librechat-images:/app/client/public/images
@@ -112,6 +113,41 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-mydatabase}
       - POSTGRES_USER=${POSTGRES_USER:-myuser}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mypassword}
+
+  # Outlook / Microsoft 365 over Microsoft Graph, reached by LibreChat as the
+  # `outlook` MCP server in librechat.yaml. Deliberately unpublished: the only
+  # thing that talks to it is the api container, and mcpSettings.allowedAddresses
+  # whitelists exactly `ms365-mcp:3000`.
+  #
+  # `--http` binds 0.0.0.0 so the api container can reach it. Per-user auth is
+  # the incoming bearer token, which LibreChat fills from the OBO exchange of
+  # the signed-in user's Entra token: no device-code login, no token on disk,
+  # no second OAuth consent screen.
+  #
+  # `--allow-unauthenticated-discovery` lets initialize/tools/list through
+  # without a bearer. Without it LibreChat's startup inspection gets a 401,
+  # caches no tools and flags the server as needing its own OAuth flow, which
+  # is what the missing-authorization message in chat was.
+  #
+  # Do NOT add --trust-proxy-auth here: it short-circuits the middleware before
+  # the bearer is read, so every call would fall back to the server's own
+  # (nonexistent) token instead of the user's.
+  ms365-mcp:
+    build:
+      context: .
+      dockerfile: ms365-mcp.Dockerfile
+      args:
+        MS365_MCP_VERSION: ${MS365_MCP_VERSION:-0.149.1}
+    image: ms365-mcp:local
+    container_name: chat-ms365-mcp
+    restart: always
+    expose:
+      - '3000'
+    command:
+      - '--http'
+      - '0.0.0.0:3000'
+      - '--org-mode'
+      - '--allow-unauthenticated-discovery'
 
 volumes:
   mongo-data:
