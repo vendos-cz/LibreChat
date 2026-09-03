@@ -1,5 +1,9 @@
 import type { ThemeDefinition } from '../types';
-import applyTheme, { applyResolvedTheme, clearAppliedTheme } from './applyTheme';
+import applyTheme, {
+  applyResolvedTheme,
+  clearAppliedTheme,
+  themeOwnedProperties,
+} from './applyTheme';
 import { defaultTheme } from '../themes/default';
 import { resolveTheme } from '../registry';
 
@@ -130,6 +134,57 @@ describe('applyTheme', () => {
     expect(root.style.getPropertyValue('--theme-motion-fast')).toBe('80ms');
   });
 
+  /** The sweep under an in-flight label is painted in CSS, so it is only
+   *  themeable if its stops are theme-owned properties. A dark theme is the
+   *  case that matters: `style.css` declares a `.dark` base outright, which a
+   *  theme can only outrank by having these applied to the document element. */
+  it('lets a dark theme restate the in-flight label sweep', () => {
+    const root = document.documentElement;
+
+    applyResolvedTheme(
+      resolveTheme(
+        {
+          version: 1,
+          name: 'shimmer-reference',
+          modes: {
+            dark: { colors: { 'rgb-shimmer-base': '12 200 180', 'rgb-shimmer-dip': '4 60 55' } },
+          },
+        },
+        'dark',
+      ),
+      root,
+    );
+
+    expect(root.style.getPropertyValue('--shimmer-base')).toBe('12 200 180');
+    expect(root.style.getPropertyValue('--shimmer-dip')).toBe('4 60 55');
+    expect(themeOwnedProperties).toEqual(
+      expect.arrayContaining(['--shimmer-base', '--shimmer-dip']),
+    );
+
+    clearAppliedTheme(root);
+    expect(root.style.getPropertyValue('--shimmer-base')).toBe('');
+  });
+
+  /** Legacy `themeRGB` themes predate the shimmer stops and this adapter applies
+   *  only the keys they name, so a stored theme would otherwise keep the stock
+   *  sweep while the rest of its palette moved — and in dark the CSS cannot
+   *  recover, since `.dark` declares a base that outranks the fallback. */
+  it('carries a legacy theme without shimmer keys onto its own text color', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-text-primary': '10 20 30' }, root);
+
+    expect(root.style.getPropertyValue('--shimmer-base')).toBe('10 20 30');
+  });
+
+  it('leaves a legacy theme that names its own shimmer base alone', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-text-primary': '10 20 30', 'rgb-shimmer-base': '90 80 70' }, root);
+
+    expect(root.style.getPropertyValue('--shimmer-base')).toBe('90 80 70');
+  });
+
   it('clears only properties owned by the theme module', () => {
     const root = document.documentElement;
     root.style.setProperty('--text-primary', '1 2 3');
@@ -142,5 +197,21 @@ describe('applyTheme', () => {
     expect(root.style.getPropertyValue('--theme-control-radius')).toBe('');
     expect(root.style.getPropertyValue('--markdown-font-size')).toBe('18px');
     root.style.removeProperty('--markdown-font-size');
+  });
+
+  it('applies provider brand backgrounds from the theme', () => {
+    applyResolvedTheme(
+      resolveTheme(
+        {
+          version: 1,
+          name: 'white-label',
+          modes: { light: {} },
+          brands: { 'provider-openai': '#123456' },
+        },
+        'light',
+      ),
+    );
+
+    expect(document.documentElement.style.getPropertyValue('--provider-openai')).toBe('#123456');
   });
 });

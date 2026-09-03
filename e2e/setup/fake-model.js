@@ -12,6 +12,7 @@
 const { FakeChatModel } = require('@librechat/agents');
 const { ChatGenerationChunk } = require('@langchain/core/outputs');
 const { AIMessageChunk } = require('@langchain/core/messages');
+const { tryBindReplay } = require('./model-replay');
 
 const MOCK_REPLY = process.env.MOCK_LLM_REPLY || 'E2E mock reply: pong';
 const CHUNK_DELAY_MS = Number(process.env.MOCK_LLM_CHUNK_DELAY_MS) || 10;
@@ -40,6 +41,7 @@ const ASK_USER_QUESTION_MARKER = 'E2E_ASK_USER_QUESTION:';
 const RESUME_ICON_REPLY_MARKER = 'E2E_RESUME_ICON_REPLY:';
 const FORCED_ERROR_MARKER = 'E2E_FORCED_ERROR:';
 const MARKDOWN_REPLY_MARKER = 'E2E_MARKDOWN_REPLY';
+const STATEFUL_CODE_MARKER = 'E2E_STATEFUL_CODE:';
 /** Two prose paragraphs, so a spec can select the message's *closing* block. */
 const PARAGRAPHS_REPLY_MARKER = 'E2E_PARAGRAPHS_REPLY';
 const MERMAID_ARTIFACT_REPLY_MARKER = 'E2E_MERMAID_ARTIFACT_REPLY';
@@ -55,6 +57,8 @@ const DEFERRED_HITL_MARKER = 'E2E_DEFERRED_HITL:';
 const HANDOFF_MARKER = 'E2E_HANDOFF:';
 const SUBAGENT_RESULT_MARKER = 'E2E_SUBAGENT_RESULT:';
 const SUBAGENT_CHILD_MARKER = 'E2E_SUBAGENT_CHILD:';
+const SUBAGENT_ACTIVITY_MARKER = 'E2E_SUBAGENT_ACTIVITY:';
+const SUBAGENT_ACTIVITY_CHILD_MARKER = 'E2E_SUBAGENT_ACTIVITY_CHILD:';
 const SUBAGENT_MODEL_OVERRIDE_ERROR =
   '[e2e] Streamed subagent result coverage requires an @librechat/agents release with ' +
   'StandardGraph.setSubagentModelOverride';
@@ -85,6 +89,7 @@ const RESUME_ICON_REPLY_CHUNKS = 240;
 const CREATE_FILE_TOOL_NAME = 'create_file';
 const EDIT_FILE_TOOL_NAME = 'edit_file';
 const BASH_TOOL_NAME = 'bash_tool';
+const STATEFUL_CODE_VALUE = 'librechat-bridge-persisted';
 const SKILL_TOOL_NAME = 'skill';
 const CREATE_SKILL_TOOL_CALL_ID = 'call_e2e_create_skill';
 const EDIT_SKILL_TOOL_CALL_ID = 'call_e2e_edit_skill';
@@ -685,15 +690,28 @@ function overrideModel({
   toolCalls,
   thrownError,
   overrideSubagentModel,
+  disableHumanInTheLoop,
   resolveInvocation,
   resolveOnStream,
+  modelCallbacks,
 }) {
+  /** The shared mock profile enables approval HITL for its dedicated specs.
+   * Detached subagents reject that run-level mode before executing, so the
+   * credential-free activity scenario explicitly models a deployment with
+   * approval HITL disabled without weakening the shared profile. */
+  if (disableHumanInTheLoop) {
+    graph.humanInTheLoop = undefined;
+    for (const executor of graph._subagentExecutors ?? []) {
+      executor.humanInTheLoop = undefined;
+    }
+  }
   if (overrideSubagentModel && typeof graph.setSubagentModelOverride !== 'function') {
     overrideModel({
       graph,
       responses: [''],
       sleep,
       thrownError: SUBAGENT_MODEL_OVERRIDE_ERROR,
+      modelCallbacks,
     });
     return;
   }
@@ -707,6 +725,7 @@ function overrideModel({
       resolveInvocation,
       resolveOnStream,
     });
+    model.callbacks = modelCallbacks;
     graph.overrideModel = model;
     if (overrideSubagentModel) {
       graph.setSubagentModelOverride(model);
@@ -730,6 +749,7 @@ function overrideModel({
     emitCustomEvent: true,
     toolCalls,
   });
+  model.callbacks = modelCallbacks;
   graph.overrideModel = model;
 }
 
@@ -1360,6 +1380,79 @@ function subagentResultResponses(text) {
   };
 }
 
+function parseSubagentActivityMarker(text) {
+  const value = getMarkerValue(text, SUBAGENT_ACTIVITY_MARKER);
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) {
+    return null;
+  }
+
+  const childIds = value.slice(0, separator).split(',').filter(Boolean);
+  if (childIds.length !== 2) {
+    return null;
+  }
+
+  return {
+    childIds,
+    label: value.slice(separator + 1),
+  };
+}
+
+function subagentActivityResponses(text) {
+  const marker = parseSubagentActivityMarker(text);
+  if (!marker) {
+    return null;
+  }
+
+  return {
+    responses: [''],
+    sleep: 50,
+    overrideSubagentModel: true,
+    disableHumanInTheLoop: true,
+    resolveInvocation: (messages) => {
+      const latestUserText = getLatestUserText(messages);
+      for (const [index] of marker.childIds.entries()) {
+        const childPrompt = `${SUBAGENT_ACTIVITY_CHILD_MARKER}${marker.label}:${index + 1}`;
+        if (!latestUserText.includes(childPrompt)) {
+          continue;
+        }
+
+        const progress = Array.from(
+          { length: 100 },
+          (_, phase) => `child-${index + 1}-phase-${phase + 1}`,
+        ).join(' ');
+        return {
+          response: `E2E detached child ${index + 1} activity ${marker.label} ${progress} E2E detached child ${index + 1} complete ${marker.label}`,
+        };
+      }
+
+      const backgroundTaskResults = (messages ?? []).filter(
+        (message) =>
+          messageType(message) === 'tool' &&
+          typeof message?.tool_call_id === 'string' &&
+          message.tool_call_id.startsWith('call_e2e_subagent_activity_'),
+      );
+      if (backgroundTaskResults.length >= marker.childIds.length) {
+        return { response: `E2E detached subagents dispatched ${marker.label}` };
+      }
+
+      return {
+        response: '',
+        toolCalls: marker.childIds.map((childId, index) => ({
+          id: `call_e2e_subagent_activity_${marker.label}_${index + 1}`,
+          name: 'subagent',
+          args: {
+            description: `${SUBAGENT_ACTIVITY_CHILD_MARKER}${marker.label}:${index + 1}`,
+            subagent_type: childId,
+            run_in_background: true,
+          },
+          type: 'tool_call',
+        })),
+      };
+    },
+  };
+}
+
 function approvalToolResponses(label, toolNames, review) {
   if (!toolNames.has(APPROVAL_TOOL_NAME)) {
     return {
@@ -1538,6 +1631,61 @@ function backgroundCollectResponses(messages, toolNames) {
   };
 }
 
+/** Fresh host-owned run started when the detached result becomes durable. */
+function backgroundCompletionResponses(text) {
+  if (!text.includes('background tool task has finished') || !text.includes('durable result')) {
+    return null;
+  }
+  const status = text.match(/"status":"(\w+)"/)?.[1] ?? 'missing';
+  const echo = text.match(/E2E slow echo: (bg-[\w-]+)/)?.[1] ?? 'missing';
+  return {
+    responses: [''],
+    resolveInvocation: async (_messages, options, runManager) => {
+      const agentId = getAgentIdFromInvocationOptions(options, runManager) ?? 'missing';
+      return {
+        response: `E2E background notified status=${status} echo=${echo} agent=${agentId}`,
+      };
+    },
+  };
+}
+
+function statefulCodeResponses(operation, toolNames) {
+  if (!toolNames.has(BASH_TOOL_NAME)) {
+    return {
+      responses: [`E2E stateful code unavailable: ${BASH_TOOL_NAME} was not advertised.`],
+    };
+  }
+
+  const commands = {
+    write: `printf ${STATEFUL_CODE_VALUE} > /mnt/data/librechat-bridge-state.txt && cat /mnt/data/librechat-bridge-state.txt`,
+    read: 'cat /mnt/data/librechat-bridge-state.txt',
+  };
+  const command = commands[operation];
+  if (!command) {
+    return { responses: [`E2E stateful code failed: unsupported operation ${operation}`] };
+  }
+
+  const toolCallId = `call_e2e_stateful_code_${operation}`;
+  return {
+    responses: ['', ''],
+    toolCalls: [
+      {
+        id: toolCallId,
+        name: BASH_TOOL_NAME,
+        args: { command },
+        type: 'tool_call',
+      },
+    ],
+    resolveOnStream: (streamMessages) => {
+      const toolMessage = findLastToolMessage(streamMessages, toolCallId);
+      if (!getContentText(toolMessage?.content).includes(STATEFUL_CODE_VALUE)) {
+        return null;
+      }
+      return { responses: [`E2E stateful code ${operation} observed ${STATEFUL_CODE_VALUE}`] };
+    },
+  };
+}
+
 function parseHandoffScript(text) {
   const encodedScript = getMarkerValue(text, HANDOFF_MARKER);
   if (!encodedScript) {
@@ -1686,6 +1834,16 @@ function findToolMessage(messages, toolCallId) {
   return (messages ?? []).find(
     (message) => messageType(message) === 'tool' && message?.tool_call_id === toolCallId,
   );
+}
+
+function findLastToolMessage(messages, toolCallId) {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (messageType(message) === 'tool' && message?.tool_call_id === toolCallId) {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 function deferredHitlCallId(label, phase) {
@@ -2125,6 +2283,16 @@ function buildHandoffResponses(graph, parsed) {
 }
 
 function resolveResponses({ graph, messages, text, toolNames }) {
+  const backgroundCompletion = backgroundCompletionResponses(text);
+  if (backgroundCompletion) {
+    return backgroundCompletion;
+  }
+
+  const subagentActivity = subagentActivityResponses(text);
+  if (subagentActivity) {
+    return subagentActivity;
+  }
+
   const subagentResult = subagentResultResponses(text);
   if (subagentResult) {
     return subagentResult;
@@ -2153,6 +2321,11 @@ function resolveResponses({ graph, messages, text, toolNames }) {
   const reply = replyResponses(text);
   if (reply) {
     return reply;
+  }
+
+  const statefulCodeOperation = getMarkerValue(text, STATEFUL_CODE_MARKER);
+  if (statefulCodeOperation) {
+    return statefulCodeResponses(statefulCodeOperation, toolNames);
   }
 
   const steerToolLabel = getMarkerValue(text, STEER_TOOL_REPLY_MARKER);
@@ -2298,6 +2471,21 @@ module.exports = function fakeModelHook(run, context) {
   }
 
   const text = getLatestUserText(context?.messages);
+  /** Recorded-session replay outranks marker routing: a conversation whose
+   * prompt matches a fixture's next recorded invocation streams that recording
+   * through the real pipeline instead of a scripted mock response. */
+  if (
+    tryBindReplay({
+      graph,
+      text,
+      agents: context?.agents,
+      messages: context?.messages,
+      conversationId: context?.conversationId,
+      modelCallbacks: context?.modelCallbacks,
+    })
+  ) {
+    return;
+  }
   const toolNames = collectToolNames(context?.agents);
   const handoffScript = parseHandoffScript(text);
   const {
@@ -2306,6 +2494,7 @@ module.exports = function fakeModelHook(run, context) {
     toolCalls,
     thrownError,
     overrideSubagentModel,
+    disableHumanInTheLoop,
     resolveInvocation,
     resolveOnStream,
   } = handoffScript
@@ -2323,6 +2512,7 @@ module.exports = function fakeModelHook(run, context) {
     toolCalls,
     thrownError,
     overrideSubagentModel,
+    disableHumanInTheLoop,
     resolveInvocation: async (streamMessages, streamOptions, runManager) =>
       deferredHitlInvocationResponse({
         graph,
@@ -2336,5 +2526,6 @@ module.exports = function fakeModelHook(run, context) {
       approvalOutcomeResponses(streamMessages) ??
       resolveOnStream?.(streamMessages, streamOptions, runManager) ??
       null,
+    modelCallbacks: context?.modelCallbacks,
   });
 };

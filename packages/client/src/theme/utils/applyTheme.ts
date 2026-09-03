@@ -1,11 +1,13 @@
-import type { IThemeAppearance, IThemeRGB, ResolvedThemeDefinition } from '../types';
-import { themeAppearanceProperties, themeColorTokens } from '../registry';
+import type { IThemeAppearance, IThemeBrands, IThemeRGB, ResolvedThemeDefinition } from '../types';
+import { themeAppearanceProperties, themeBrandTokens, themeColorTokens } from '../registry';
 
 const colorProperty = (token: keyof IThemeRGB): `--${string}` => `--${token.slice(4)}`;
+const brandProperty = (token: keyof IThemeBrands): `--${string}` => `--${token}`;
 
 export const themeOwnedProperties: readonly string[] = Object.freeze([
   ...themeColorTokens.map(colorProperty),
   ...Object.values(themeAppearanceProperties),
+  ...themeBrandTokens.map(brandProperty),
 ]);
 
 const rgbPattern = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/;
@@ -31,6 +33,20 @@ function mapColors(colors: IThemeRGB): Array<[string, string]> {
     variables.push(['--surface-composer-hover', colors['rgb-surface-hover']]);
   }
 
+  /**
+   * Stored and environment themes predate the shimmer stops, and this adapter
+   * applies only the keys a theme names — so without this they would keep the
+   * stock sweep while every other color moved, and in dark mode the CSS cannot
+   * recover: `.dark` declares a base outright, so the `--text-primary` fallback
+   * never runs. The bright stop follows the theme's primary text color, which
+   * is what it already resolves to in light. The dip has no legacy counterpart
+   * and stays at its default: it is the faded half of the sweep, carried at low
+   * alpha, so it reads as dimmed against any base.
+   */
+  if (colors['rgb-shimmer-base'] === undefined && colors['rgb-text-primary'] !== undefined) {
+    variables.push(['--shimmer-base', colors['rgb-text-primary']]);
+  }
+
   return variables;
 }
 
@@ -50,7 +66,13 @@ export function applyResolvedTheme(
   theme: ResolvedThemeDefinition,
   root: HTMLElement = document.documentElement,
 ): void {
-  const variables = [...mapColors(theme.colors), ...mapAppearance(theme.appearance)];
+  const variables = [
+    ...mapColors(theme.colors),
+    ...mapAppearance(theme.appearance),
+    ...themeBrandTokens.map(
+      (token) => [brandProperty(token), theme.brands[token]] as [string, string],
+    ),
+  ];
 
   variables.forEach(([property, value]) => root.style.setProperty(property, value));
   root.dataset.theme = theme.name;

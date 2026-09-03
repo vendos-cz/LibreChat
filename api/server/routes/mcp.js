@@ -10,6 +10,7 @@ const {
 const {
   getBasePath,
   createSafeUser,
+  createAuthIdentityContext,
   MCPOAuthHandler,
   MCPTokenStorage,
   setOAuthSession,
@@ -23,6 +24,7 @@ const {
   OAUTH_SESSION_COOKIE,
   mcpConfig: mcpSettings,
   getServerCustomUserVars,
+  hasCustomUserVars,
   requiresEphemeralUserConnection,
 } = require('@librechat/api');
 const {
@@ -50,6 +52,7 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { invalidateCachedTools } = require('~/server/services/Config');
 const { updateMCPServerTools } = require('~/server/services/Config/mcp');
 const { reinitMCPServer } = require('~/server/services/Tools/mcp');
+const { createOpenIDSessionTokenProvider } = require('~/server/services/OpenIDSessionRefresh');
 const { getLogStores } = require('~/cache');
 const db = require('~/models');
 
@@ -838,6 +841,10 @@ router.post(
           findPluginAuthsByKeys: db.findPluginAuthsByKeys,
         });
       }
+      const oboIdentityContext = createAuthIdentityContext({
+        user: req.user,
+        tenantId: getTenantId(),
+      });
 
       const result = await reinitMCPServer({
         user,
@@ -845,6 +852,14 @@ router.post(
         serverConfig,
         configServers,
         userMCPAuthMap,
+        upstreamTokenProvider: createOpenIDSessionTokenProvider({
+          req,
+          res,
+          user: req.user,
+          identityContext: oboIdentityContext,
+          tokenPreference: 'access_token',
+        }),
+        oboIdentityContext,
       });
 
       if (!result) {
@@ -926,6 +941,9 @@ router.get('/connection/status', requireJwtAuth, async (req, res) => {
               {
                 connectionState: 'error',
                 requiresOAuth: oauthServers.has(serverName),
+                ...(requiresEphemeralUserConnection(config) && { requestScoped: true }),
+                ...(requiresEphemeralUserConnection(config) &&
+                  hasCustomUserVars(config) && { configurationState: 'needs_configuration' }),
                 authorizationState: oauthServers.has(serverName) ? 'error' : 'not_required',
                 error: message,
               },
@@ -987,6 +1005,8 @@ router.get('/connection/status/:serverName', requireJwtAuth, async (req, res) =>
       serverName,
       connectionStatus: serverStatus.connectionState,
       requiresOAuth: serverStatus.requiresOAuth,
+      requestScoped: serverStatus.requestScoped,
+      configurationState: serverStatus.configurationState,
       authorizationState: serverStatus.authorizationState,
     });
   } catch (error) {

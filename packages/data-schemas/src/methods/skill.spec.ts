@@ -1337,6 +1337,7 @@ describe('Skill CRUD methods', () => {
     });
     const names = result.skills.map((s) => s.name).sort();
     expect(names).toEqual(['always-a', 'always-b']);
+    expect(result.skills.map((skill) => skill.version)).toEqual([1, 1]);
   });
 
   it('listAlwaysApplySkills excludes rows outside accessibleIds', async () => {
@@ -1867,7 +1868,7 @@ describe('SkillFile methods', () => {
     }
   });
 
-  it('clears codeEnvRef when a skill file is upserted (replacement)', async () => {
+  it('clears all code environment refs when a skill file is upserted (replacement)', async () => {
     /* A re-upload of a skill file replaces the row's contents — but the
      * cached `codeEnvRef` refers to the OLD bytes living in codeapi.
      * Leaving it populated would make the next prime resolve a stale
@@ -1926,6 +1927,7 @@ describe('SkillFile methods', () => {
     expect(after).toHaveLength(1);
     expect(after[0].file_id).toBe('file-2');
     expect(after[0].codeEnvRef).toBeUndefined();
+    expect(after[0].codeEnvRefs).toBeUndefined();
   });
 
   it('deleteSkillFile recounts and bumps version', async () => {
@@ -2023,6 +2025,99 @@ describe('SkillFile methods', () => {
         storage_session_id: 'session-1',
         file_id: 'file-1',
         version: 1,
+      });
+      expect(files[0].codeEnvRefs?.default).toMatchObject({
+        kind: 'skill',
+        id: entityId,
+        storage_session_id: 'session-1',
+        file_id: 'file-1',
+        version: 1,
+      });
+    });
+
+    it('retains pointers for both execution profiles', async () => {
+      const { skill } = await methods.createSkill(makeSkillInput());
+      await methods.upsertSkillFile({
+        skillId: skill._id,
+        relativePath: 'scripts/a.sh',
+        file_id: 'f1',
+        filename: 'a.sh',
+        filepath: '/a',
+        source: 'local',
+        mimeType: 'text/plain',
+        bytes: 1,
+        author: owner._id,
+      });
+      const base = {
+        kind: 'skill' as const,
+        id: skill._id.toString(),
+        version: 1,
+      };
+
+      await methods.updateSkillFileCodeEnvIds([
+        {
+          skillId: skill._id,
+          relativePath: 'scripts/a.sh',
+          codeEnvRef: {
+            ...base,
+            storage_session_id: 'default-session',
+            file_id: 'default-file',
+            executionProfile: 'default',
+          },
+        },
+        {
+          skillId: skill._id,
+          relativePath: 'scripts/a.sh',
+          codeEnvRef: {
+            ...base,
+            storage_session_id: 'stateful-session',
+            file_id: 'stateful-file',
+            executionProfile: 'stateful',
+          },
+        },
+      ]);
+
+      const [file] = await methods.listSkillFiles(skill._id);
+      expect(file.codeEnvRefs?.default?.file_id).toBe('default-file');
+      expect(file.codeEnvRefs?.stateful?.file_id).toBe('stateful-file');
+    });
+
+    it('persists deployment-specific route keys and their reference metadata', async () => {
+      const { skill } = await methods.createSkill(makeSkillInput());
+      await methods.upsertSkillFile({
+        skillId: skill._id,
+        relativePath: 'scripts/a.sh',
+        file_id: 'f1',
+        filename: 'a.sh',
+        filepath: '/a',
+        source: 'local',
+        mimeType: 'text/plain',
+        bytes: 1,
+        author: owner._id,
+      });
+      const executionRouteKey = 'stateful:0123456789abcdef0123456789abcdef';
+
+      await methods.updateSkillFileCodeEnvIds([
+        {
+          skillId: skill._id,
+          relativePath: 'scripts/a.sh',
+          codeEnvRef: {
+            kind: 'skill',
+            id: skill._id.toString(),
+            version: 1,
+            storage_session_id: 'route-session',
+            file_id: 'route-file',
+            executionProfile: 'stateful',
+            executionRouteKey,
+          },
+        },
+      ]);
+
+      const [file] = await methods.listSkillFiles(skill._id);
+      expect(file.codeEnvRefs?.[executionRouteKey]).toMatchObject({
+        file_id: 'route-file',
+        executionProfile: 'stateful',
+        executionRouteKey,
       });
     });
 
