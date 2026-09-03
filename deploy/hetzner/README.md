@@ -138,10 +138,39 @@ requests carrying `token_provider=openid` take the `openidJwt` strategy, so
 Google and password logins are unaffected — but OpenID users may have to sign
 in once after the deploy that first sets it.
 
-One prerequisite still lives outside this repo: **delegated Graph permissions
-on the Entra app registration**. The OBO scope is
-`https://graph.microsoft.com/.default`, which grants exactly what that app
-already has admin consent for — widen it there, not in `librechat.yaml`.
+### The Entra app registration this depends on
+
+Outlook works only for users who signed in through **OpenID against Entra ID**.
+A Google or password login carries no Microsoft token, so there is nothing to
+exchange and the API log says `No valid OpenID token available for OBO exchange
+(provider: google, ...)`. Google sign-in keeps working for everything else;
+it just cannot reach Outlook.
+
+The app registration needs four things, and the third is the one that is easy
+to miss:
+
+1. **Redirect URIs** (Web): `${DOMAIN_SERVER}/oauth/openid/callback` and, for
+   admin-panel SSO, `${DOMAIN_SERVER}/api/admin/oauth/openid/callback`.
+2. **A client secret**, delivered as the `OPENID_CLIENT_SECRET` repository
+   secret rather than hand-edited into `.env`.
+3. **An exposed API scope of its own** — Application ID URI `api://<client-id>`
+   plus a delegated scope such as `access_as_user` — named in `OPENID_SCOPE`.
+   Entra refuses an OBO exchange whose assertion was issued for Microsoft Graph
+   instead of the calling app ([AADSTS500011](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-on-behalf-of-flow)),
+   and the default `openid profile email` produces exactly such a token. So
+   `OPENID_SCOPE` must read
+   `openid profile email offline_access api://<client-id>/access_as_user`.
+4. **Delegated Microsoft Graph permissions with admin consent** — `Mail.ReadWrite`,
+   `Mail.Send`, `Calendars.ReadWrite`, `Contacts.Read`, and whatever else the
+   tools should reach. The OBO scope is `https://graph.microsoft.com/.default`,
+   which grants exactly what that app already has consent for; widen it there,
+   not in `librechat.yaml`.
+
+`OPENID_CLIENT_ID`, `OPENID_CLIENT_SECRET` and `OPENID_ISSUER`
+(`https://login.microsoftonline.com/<tenant-id>/v2.0`) are repository secrets;
+`OPENID_SCOPE` and `OPENID_BUTTON_LABEL` are repository variables, since
+neither is secret and both are worth reading at a glance. All five are applied
+by the deploy's override loop, so an unset one leaves `.env` alone.
 
 Tool availability follows from those permissions: `--org-mode` exposes the full
 tool set (mail, calendar, contacts, Teams, SharePoint, OneDrive), and a call

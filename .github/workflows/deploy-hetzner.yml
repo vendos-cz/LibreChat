@@ -82,6 +82,17 @@ jobs:
           # every user for a key.
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          # Entra ID (or any OIDC provider) login. Required for the Outlook MCP
+          # server: its per-user Graph token is an OBO exchange of the token
+          # this login issues, so without OpenID there is nothing to exchange.
+          # OPENID_SCOPE must name the app's own exposed scope
+          # (api://<client-id>/<scope>) - Entra refuses to exchange a token
+          # whose audience is Microsoft Graph rather than this app.
+          OPENID_CLIENT_ID: ${{ secrets.OPENID_CLIENT_ID }}
+          OPENID_CLIENT_SECRET: ${{ secrets.OPENID_CLIENT_SECRET }}
+          OPENID_ISSUER: ${{ secrets.OPENID_ISSUER }}
+          OPENID_SCOPE: ${{ vars.OPENID_SCOPE }}
+          OPENID_BUTTON_LABEL: ${{ vars.OPENID_BUTTON_LABEL }}
           # Off-site backup destination and the passphrase the archive is
           # encrypted with before it leaves the server. Unset keeps backups
           # local, which does not survive losing the server.
