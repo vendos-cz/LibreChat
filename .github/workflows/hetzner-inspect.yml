@@ -51,3 +51,38 @@ jobs:
           echo; echo "=== docker networks ==="
           docker network ls --format '{{.Name}}\t{{.Driver}}' 2>/dev/null
           REMOTE
+
+      # The Outlook MCP server authenticates per user through an OBO token
+      # exchange, so when it fails the only evidence is in the API log - and
+      # the operator does not always have shell access. This step surfaces
+      # exactly the lines that matter, with anything JWT-shaped redacted:
+      # OBO errors can quote an upstream response, and Actions logs are
+      # readable by anyone with repo access.
+      - name: Inspect MCP / Outlook
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER_NAME: ${{ secrets.HETZNER_USER }}
+          PORT: ${{ secrets.HETZNER_SSH_PORT }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" -o BatchMode=yes \
+            "${USER_NAME:-root}@$HOST" 'bash -s' <<'REMOTE'
+          set -u
+          redact() { sed -E 's/ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}[A-Za-z0-9._-]*/<redacted-jwt>/g'; }
+          echo "=== auth-relevant .env flags (values, not secrets) ==="
+          grep -E '^(OPENID_REUSE_TOKENS|GRAPH_API_SCOPES)=' \
+            /opt/librechat/deploy/hetzner/.env 2>/dev/null || echo "neither key is set"
+          echo "OPENID_CLIENT_ID set: $(grep -qE '^OPENID_CLIENT_ID=.+' /opt/librechat/deploy/hetzner/.env && echo yes || echo no)"
+          echo; echo "=== ms365-mcp container ==="
+          docker ps -a --filter name=chat-ms365-mcp --format '{{.Names}}\t{{.Status}}' 2>&1
+          echo; echo "=== can the api container reach it? (200 = yes) ==="
+          docker exec LibreChat-API curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
+            -X POST http://ms365-mcp:3000/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>&1
+          echo; echo "=== ms365-mcp log (last 30) ==="
+          docker logs --tail 30 chat-ms365-mcp 2>&1 | redact
+          echo; echo "=== API log, MCP/OBO lines (last 60) ==="
+          docker logs --since 6h LibreChat-API 2>&1 \
+            | grep -iE 'mcp|obo|outlook|graph|openid' | tail -60 | redact
+          REMOTE
