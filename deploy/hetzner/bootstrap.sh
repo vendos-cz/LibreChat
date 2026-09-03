@@ -464,10 +464,17 @@ fi
 # Settings worth changing after the first deploy, without hand-editing .env on
 # the server. Each is applied only when given, so an unset one keeps its
 # current value rather than reverting to the example default.
+#
+# OPENID_SCOPE is delivered unquoted on purpose. .env.example ships it as
+# "openid profile email", and a quoted value reaches the container with the
+# quotes attached, which Entra rejects as a scope. set_env writes verbatim, so
+# pass the bare scope list and the quotes never appear.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
                 ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY OPENROUTER_KEY GOOGLE_KEY \
                 SERPER_API_KEY FIRECRAWL_API_KEY \
-                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+                OPENID_CLIENT_ID OPENID_CLIENT_SECRET OPENID_ISSUER OPENID_SCOPE \
+                OPENID_BUTTON_LABEL; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
   # Empty means "leave whatever is there alone", which is what makes an unset
