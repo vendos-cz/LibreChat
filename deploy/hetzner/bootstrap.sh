@@ -393,6 +393,20 @@ set_env FILE_USAGE_USER_WINDOW 15
 set_env NO_INDEX true
 set_env TRUST_PROXY 1
 
+# The Outlook MCP server authenticates each user by exchanging their Entra
+# token for a Microsoft Graph token (OBO). That exchange needs the user's
+# federated access token, which is only kept when token reuse is on - without
+# it the API logs "No valid OpenID token available for Graph token exchange"
+# and Outlook silently has no access. Only set when OpenID is actually
+# configured: on a deployment without it the flag would be inert noise.
+# Scope of the change: the openidJwt strategy is used only for requests
+# carrying token_provider=openid, with the normal jwt strategy still in the
+# chain, so Google and password logins are untouched. OpenID users may have to
+# sign in once after the deploy that first sets this.
+if [ -n "$(current_env OPENID_CLIENT_ID)" ]; then
+  set_env OPENID_REUSE_TOKENS true
+fi
+
 # An unset DOMAIN must not move a live deployment onto its bare IP. OAuth
 # callback URLs are built from DOMAIN_SERVER, so rewriting it silently breaks
 # every social login. Recover the hostname .env already records and fall back

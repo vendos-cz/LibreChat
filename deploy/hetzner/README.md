@@ -14,6 +14,7 @@ Let's Encrypt certificates.
 | `meilisearch` | `getmeili/meilisearch:v1.35.1` | Conversation search |
 | `vectordb` | `pgvector/pgvector:0.8.0-pg15` | Embeddings for RAG |
 | `rag_api` | `librechat-rag-api-dev-lite` | File ingestion / retrieval |
+| `ms365-mcp` | built from `ms365-mcp.Dockerfile` | Outlook / Microsoft 365 MCP server (mail, calendar, contacts) |
 
 Only Caddy publishes ports. Everything else stays on the internal Docker
 network.
@@ -116,6 +117,45 @@ operator out — `ALLOW_EMAIL_LOGIN`, `ALLOW_UNVERIFIED_EMAIL_LOGIN`,
 Secrets.
 
 It also mirrors `OPENAI_API_KEY` into `IMAGE_GEN_OAI_API_KEY` — see below.
+
+## Outlook / Microsoft 365 MCP
+
+`ms365-mcp` runs [`@softeria/ms-365-mcp-server`](https://github.com/softeria/ms-365-mcp-server)
+in HTTP mode on the internal network only, and `librechat.yaml` declares it as
+the `outlook` MCP server pointing at `http://ms365-mcp:3000/mcp`.
+
+Authentication is On-Behalf-Of, not a second login. LibreChat takes the
+signed-in user's Entra access token, exchanges it for a Microsoft Graph token
+(`jwt-bearer` grant, `OboTokenService`) and sends that as the request's
+`Authorization: Bearer` header; the MCP server uses it directly against Graph.
+Nobody clicks an OAuth link and no token is stored in the container.
+
+`bootstrap.sh` sets **`OPENID_REUSE_TOKENS=true`** on every deploy that has
+`OPENID_CLIENT_ID` in `.env`, because the exchange needs the user's federated
+access token and that is only kept when token reuse is on; without it the API
+log says `No valid OpenID token available for Graph token exchange`. Only
+requests carrying `token_provider=openid` take the `openidJwt` strategy, so
+Google and password logins are unaffected — but OpenID users may have to sign
+in once after the deploy that first sets it.
+
+One prerequisite still lives outside this repo: **delegated Graph permissions
+on the Entra app registration**. The OBO scope is
+`https://graph.microsoft.com/.default`, which grants exactly what that app
+already has admin consent for — widen it there, not in `librechat.yaml`.
+
+Tool availability follows from those permissions: `--org-mode` exposes the full
+tool set (mail, calendar, contacts, Teams, SharePoint, OneDrive), and a call
+whose scope was never consented is rejected by Graph, not by the MCP server.
+
+`--allow-unauthenticated-discovery` is deliberate: it lets `initialize` and
+`tools/list` through without a bearer so LibreChat's startup inspection can
+cache the tool list. Without it startup gets a 401 and LibreChat flags the
+server as needing its own OAuth flow. Do **not** add `--trust-proxy-auth` —
+it returns from the auth middleware before the bearer is read, so every call
+would fall back to the server's own (nonexistent) token instead of the user's.
+
+Bumping the server: change `MS365_MCP_VERSION` in `docker-compose.yml` (or set
+it in `.env`) and redeploy.
 
 ## Image generation
 

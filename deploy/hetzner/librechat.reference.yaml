@@ -280,10 +280,40 @@ fileConfig:
   # .py, .js, .css, .eml a u OCR docx/xlsx/pptx. Nezužuj to bez důvodu.
 
 # -----------------------------------------------------------------------------
-# MCP - jen síťová výjimka
+# MCP servery
 # -----------------------------------------------------------------------------
-# Tvých 9 MCP serverů je zadaných přes UI, takže žije v Mongu, ne tady.
-# Tenhle blok jen povoluje interní docker adresy, které by SSRF ochrana jinak
+# Ostatní MCP servery jsou zadané přes UI, takže žijí v Mongu, ne tady. Outlook
+# je výjimka a je tady schválně: OBO (výměna tokenu přihlášeného uživatele za
+# Graph token) je u YAML configu automaticky důvěryhodné, kdežto u serveru
+# zadaného přes UI ho gatuje permission MCP_SERVERS.CONFIGURE_OBO, která je
+# defaultně false pro všechny role včetně adminské.
+#
+# Při kolizi jmen vyhrává YAML (MCPServersRegistry.fetchBaseServerConfigs dělá
+# `{...dbConfigs, ...yamlConfigs}`), takže starý `outlook` záznam v UI už nic
+# nedělá - smaž ho, ať tě nemate.
+mcpServers:
+  outlook:
+    type: 'streamable-http'
+    title: 'Outlook'
+    description: 'Mail, kalendář a kontakty přes Microsoft Graph'
+    url: 'http://ms365-mcp:3000/mcp'
+    # Uživatel se k Microsoftu nikde nepřihlašuje. LibreChat vezme jeho Entra
+    # token z přihlášení do LibreChatu, vymění ho OBO flow (jwt-bearer grant)
+    # za Graph token a pošle ho serveru v hlavičce Authorization; ms365-mcp ho
+    # použije rovnou proti Graphu. Proto tu není žádný `oauth` blok a proto
+    # nebylo na co klikat.
+    #
+    # VYŽADUJE OPENID_REUSE_TOKENS=true v .env - bez toho se federovaný
+    # access token uživatele nikam neuloží a není co vyměňovat. V logu se to
+    # projeví jako "No valid OpenID token available for Graph token exchange".
+    #
+    # `.default` = uživatel dostane přesně ta delegovaná oprávnění, která má
+    # app registration v Entra odsouhlasená. Rozsah se řídí tam, ne tady;
+    # vypsaný seznam scopes by se s odsouhlaseným stavem časem rozešel.
+    obo:
+      scopes: 'https://graph.microsoft.com/.default'
+
+# Síťová výjimka: povoluje interní docker adresy, které by SSRF ochrana jinak
 # zablokovala (privátní IP a interní hostname jsou od 1.3.14 blokované).
 #
 # allowedDomains je STRIKTNÍ whitelist - jak ho nastavíš, všechno neuvedené
@@ -417,13 +447,25 @@ endpoints:
         - 'send_audio_message_mcp_*'
         - 'forward_mcp_*'
         - 'reply_mcp_*'
-        - 'outlook_send_mail_mcp_*'
-        - 'outlook_send_draft_mcp_*'
-        - 'outlook_forward_mail_mcp_*'
+        # ms-365-mcp-server pojmenovává nástroje se spojovníky (send-mail,
+        # send-draft-message, reply-all-mail-message, forward-calendar-event,
+        # send-chat-message, delete-todo-task, remove-group-member, ...), ne
+        # `outlook_send_mail`. Předchozí `outlook_*` vzory nematchovaly nic.
+        # Rodina vzorů místo výčtu: server má 332 nástrojů a jmenný prefix je
+        # u něj spolehlivější vodítko než seznam, který zestárne s každou verzí.
+        - 'send-*_mcp_*'
+        - 'reply-*_mcp_*'
+        - 'forward-*_mcp_*'
+        - 'delete-*_mcp_*'
+        - 'remove-*_mcp_*'
       deny:
         - 'trash_thread_mcp_*'
         - 'trash_message_mcp_*'
-        - 'outlook_trash_thread_mcp_*'
+        # Mazat mail agent nepotřebuje. `deny` vyhrává nad `ask` výš, takže
+        # ostatní delete-* se jen doptají.
+        - 'delete-mail-message_mcp_*'
+        - 'delete-mail-folder_mcp_*'
+        - 'delete-mail-attachment_mcp_*'
       reason: 'Tohle odešle něco navenek. Zkontroluj to, než to pustíš.'
 
     # Přežití běhu přes restart
