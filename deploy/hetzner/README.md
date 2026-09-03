@@ -130,14 +130,18 @@ signed-in user's Entra access token, exchanges it for a Microsoft Graph token
 `Authorization: Bearer` header; the MCP server uses it directly against Graph.
 Nobody clicks an OAuth link and no token is stored in the container.
 
-Two prerequisites live outside this repo:
+`bootstrap.sh` sets **`OPENID_REUSE_TOKENS=true`** on every deploy that has
+`OPENID_CLIENT_ID` in `.env`, because the exchange needs the user's federated
+access token and that is only kept when token reuse is on; without it the API
+log says `No valid OpenID token available for Graph token exchange`. Only
+requests carrying `token_provider=openid` take the `openidJwt` strategy, so
+Google and password logins are unaffected — but OpenID users may have to sign
+in once after the deploy that first sets it.
 
-- **`OPENID_REUSE_TOKENS=true` in `.env`.** Without it the user's federated
-  access token is never kept, so there is nothing to exchange and the API log
-  says `No valid OpenID token available for Graph token exchange`.
-- **Delegated Graph permissions on the Entra app registration.** The OBO scope
-  is `https://graph.microsoft.com/.default`, which grants exactly what that app
-  already has admin consent for — widen it there, not in `librechat.yaml`.
+One prerequisite still lives outside this repo: **delegated Graph permissions
+on the Entra app registration**. The OBO scope is
+`https://graph.microsoft.com/.default`, which grants exactly what that app
+already has admin consent for — widen it there, not in `librechat.yaml`.
 
 Tool availability follows from those permissions: `--org-mode` exposes the full
 tool set (mail, calendar, contacts, Teams, SharePoint, OneDrive), and a call
