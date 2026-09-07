@@ -130,13 +130,20 @@ signed-in user's Entra access token, exchanges it for a Microsoft Graph token
 `Authorization: Bearer` header; the MCP server uses it directly against Graph.
 Nobody clicks an OAuth link and no token is stored in the container.
 
-`bootstrap.sh` sets **`OPENID_REUSE_TOKENS=true`** on every deploy that has
-`OPENID_CLIENT_ID` in `.env`, because the exchange needs the user's federated
-access token and that is only kept when token reuse is on; without it the API
-log says `No valid OpenID token available for Graph token exchange`. Only
-requests carrying `token_provider=openid` take the `openidJwt` strategy, so
-Google and password logins are unaffected — but OpenID users may have to sign
-in once after the deploy that first sets it.
+Once `OPENID_CLIENT_ID` is set, `bootstrap.sh` fills in the two settings that
+follow from it and are easy to miss:
+
+- **`OPENID_SESSION_SECRET`** is generated if empty. It gates the whole
+  feature: `socialLogins.js` only calls `configureOpenId` when `CLIENT_ID`,
+  `ISSUER`, `SCOPE` and this secret are all set, so an empty one means the
+  sign-in button never appears and nothing says why. It is never regenerated —
+  rotating it would invalidate live sessions.
+- **`OPENID_REUSE_TOKENS=true`**, because the exchange needs the user's
+  federated access token and that is only kept when token reuse is on; without
+  it the API log says `No valid OpenID token available for OBO exchange`. Only
+  requests carrying `token_provider=openid` take the `openidJwt` strategy, so
+  Google and password logins are unaffected — but OpenID users may have to sign
+  in once after the deploy that first sets it.
 
 ### The Entra app registration this depends on
 
