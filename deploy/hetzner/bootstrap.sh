@@ -393,20 +393,6 @@ set_env FILE_USAGE_USER_WINDOW 15
 set_env NO_INDEX true
 set_env TRUST_PROXY 1
 
-# The Outlook MCP server authenticates each user by exchanging their Entra
-# token for a Microsoft Graph token (OBO). That exchange needs the user's
-# federated access token, which is only kept when token reuse is on - without
-# it the API logs "No valid OpenID token available for Graph token exchange"
-# and Outlook silently has no access. Only set when OpenID is actually
-# configured: on a deployment without it the flag would be inert noise.
-# Scope of the change: the openidJwt strategy is used only for requests
-# carrying token_provider=openid, with the normal jwt strategy still in the
-# chain, so Google and password logins are untouched. OpenID users may have to
-# sign in once after the deploy that first sets this.
-if [ -n "$(current_env OPENID_CLIENT_ID)" ]; then
-  set_env OPENID_REUSE_TOKENS true
-fi
-
 # An unset DOMAIN must not move a live deployment onto its bare IP. OAuth
 # callback URLs are built from DOMAIN_SERVER, so rewriting it silently breaks
 # every social login. Recover the hostname .env already records and fall back
@@ -464,10 +450,17 @@ fi
 # Settings worth changing after the first deploy, without hand-editing .env on
 # the server. Each is applied only when given, so an unset one keeps its
 # current value rather than reverting to the example default.
+#
+# OPENID_SCOPE is delivered unquoted on purpose. .env.example ships it as
+# "openid profile email", and a quoted value reaches the container with the
+# quotes attached, which Entra rejects as a scope. set_env writes verbatim, so
+# pass the bare scope list and the quotes never appear.
 for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION \
                 ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY OPENROUTER_KEY GOOGLE_KEY \
                 SERPER_API_KEY FIRECRAWL_API_KEY \
-                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+                OPENID_CLIENT_ID OPENID_CLIENT_SECRET OPENID_ISSUER OPENID_SCOPE \
+                OPENID_BUTTON_LABEL; do
   eval "override_value=\${$override:-}"
   [ -n "$override_value" ] || continue
   # Empty means "leave whatever is there alone", which is what makes an unset
@@ -482,6 +475,32 @@ for override in ALLOW_REGISTRATION ALLOW_SOCIAL_LOGIN ALLOW_SOCIAL_REGISTRATION 
   set_env "$override" "$override_value"
   log "Applied $override from the deploy environment"
 done
+
+# Two settings that follow from OpenID being configured at all. Placed after
+# the override loop on purpose: on the deploy that first delivers
+# OPENID_CLIENT_ID, a check before the loop still reads the old empty value
+# and would defer both to the next deploy.
+#
+# OPENID_SESSION_SECRET gates the whole feature. socialLogins.js only calls
+# configureOpenId when CLIENT_ID, ISSUER, SCOPE and this secret are all set,
+# so an empty one means the Microsoft button never appears and nothing says
+# why. It is generated here rather than asked for, like the other secrets
+# above, and never regenerated - rotating it would invalidate live sessions.
+#
+# OPENID_REUSE_TOKENS is what keeps the user's federated access token, which
+# is what the Outlook MCP server's OBO exchange consumes. Without it the API
+# logs "No valid OpenID token available for OBO exchange" and Outlook has no
+# access. Only requests carrying token_provider=openid take the openidJwt
+# strategy, with the normal jwt strategy still in the chain, so Google and
+# password logins are untouched - but OpenID users may have to sign in once
+# after the deploy that first sets it.
+if [ -n "$(current_env OPENID_CLIENT_ID)" ]; then
+  if [ -z "$(current_env OPENID_SESSION_SECRET)" ]; then
+    set_env OPENID_SESSION_SECRET "$(openssl rand -hex 32)"
+    log "Generated OPENID_SESSION_SECRET"
+  fi
+  set_env OPENID_REUSE_TOKENS true
+fi
 
 # gpt-image-1 is reached through IMAGE_GEN_OAI_API_KEY, and OpenAIImageTools.js
 # resolves that variable alone - there is no fallback to OPENAI_API_KEY. A
