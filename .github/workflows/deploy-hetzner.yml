@@ -91,8 +91,12 @@ jobs:
           OPENID_CLIENT_ID: ${{ secrets.OPENID_CLIENT_ID }}
           OPENID_CLIENT_SECRET: ${{ secrets.OPENID_CLIENT_SECRET }}
           OPENID_ISSUER: ${{ secrets.OPENID_ISSUER }}
-          OPENID_SCOPE: ${{ vars.OPENID_SCOPE }}
-          OPENID_BUTTON_LABEL: ${{ vars.OPENID_BUTTON_LABEL }}
+          # Neither is secret, so a repository variable is the natural home -
+          # but putting them in Secrets instead is an easy mistake to make and
+          # would fail silently, with OPENID_SCOPE unset disabling OpenID
+          # entirely. Accept either.
+          OPENID_SCOPE: ${{ vars.OPENID_SCOPE || secrets.OPENID_SCOPE }}
+          OPENID_BUTTON_LABEL: ${{ vars.OPENID_BUTTON_LABEL || secrets.OPENID_BUTTON_LABEL }}
           # Off-site backup destination and the passphrase the archive is
           # encrypted with before it leaves the server. Unset keeps backups
           # local, which does not survive losing the server.
