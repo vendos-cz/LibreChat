@@ -129,6 +129,11 @@ jobs:
           [ "${ALLOW_REGISTRATION_CHOICE:-keep}" = "keep" ] \
             || ALLOW_REGISTRATION="$ALLOW_REGISTRATION_CHOICE"
 
+          # Every variable the server needs is named twice: once in `env:`
+          # above and once in the assignment prefix below. Adding it to only
+          # the first is invisible - the deploy succeeds and bootstrap.sh sees
+          # an empty value, which it reads as "leave .env alone". Keep the two
+          # lists in step.
           ssh -i ~/.ssh/id_deploy -p "${PORT:-22}" \
             -o BatchMode=yes -o ServerAliveInterval=30 \
             "${USER_NAME:-root}@$HOST" \
@@ -150,5 +155,10 @@ jobs:
              GOOGLE_CLIENT_SECRET='$GOOGLE_CLIENT_SECRET' \
              ALLOW_SOCIAL_LOGIN='$ALLOW_SOCIAL_LOGIN' \
              ALLOW_SOCIAL_REGISTRATION='$ALLOW_SOCIAL_REGISTRATION' \
+             OPENID_CLIENT_ID='$OPENID_CLIENT_ID' \
+             OPENID_CLIENT_SECRET='$OPENID_CLIENT_SECRET' \
+             OPENID_ISSUER='$OPENID_ISSUER' \
+             OPENID_SCOPE='$OPENID_SCOPE' \
+             OPENID_BUTTON_LABEL='$OPENID_BUTTON_LABEL' \
              ALLOWED_REGISTRATION_DOMAINS='$ALLOWED_REGISTRATION_DOMAINS' \
              bash -s" < deploy/hetzner/bootstrap.sh
