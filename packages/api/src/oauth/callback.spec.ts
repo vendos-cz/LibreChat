@@ -114,6 +114,41 @@ describe('OpenID OAuth callback helpers', () => {
     );
   });
 
+  it('names the provider rejection in the message so the formatter cannot drop it', () => {
+    const req = createRequest({
+      query: {
+        error: 'consent_required',
+        error_description: 'AADSTS65001: The user or administrator has not consented to use the application.',
+      },
+    });
+
+    logOpenIDCallbackFailure({
+      logger,
+      req,
+      err: { name: 'AuthorizationResponseError' },
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[OpenID OAuth] Callback authentication failed [provider: consent_required - AADSTS65001: The user or administrator has not consented to use the application.]',
+      expect.objectContaining({
+        query_error: 'consent_required',
+        query_error_description:
+          'AADSTS65001: The user or administrator has not consented to use the application.',
+      }),
+    );
+  });
+
+  it('leaves the message unchanged when the provider sent no error', () => {
+    const req = createRequest();
+
+    logOpenIDCallbackFailure({ logger, req, err: { code: 'OAUTH_INVALID_RESPONSE' } });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[OpenID OAuth] Callback authentication failed',
+      expect.objectContaining({ code: 'OAUTH_INVALID_RESPONSE' }),
+    );
+  });
+
   it('continues the successful callback path after logging in without a session', () => {
     const user = { id: 'user-1' };
     const req = createRequest();
