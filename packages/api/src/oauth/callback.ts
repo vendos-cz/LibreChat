@@ -68,6 +68,24 @@ export function redirectToAuthFailure(
   res.redirect(`${clientDomain}/login?redirect=false&error=${authFailedError}`);
 }
 
+/**
+ * The identity provider's own reason for rejecting the callback arrives as the
+ * `error`/`error_description` query pair and is the only thing that identifies
+ * a misconfiguration (an unconsented scope, a tenant restriction). It is
+ * folded into the message text because the winston formatter prints the
+ * message and drops the rest of the details object, which left the failure
+ * logged as a bare "authorization response from the server is an error".
+ */
+function describeProviderRejection(details: OAuthFailureLog): string {
+  if (!details.query_error) {
+    return '';
+  }
+  if (!details.query_error_description) {
+    return ` [provider: ${details.query_error}]`;
+  }
+  return ` [provider: ${details.query_error} - ${details.query_error_description}]`;
+}
+
 export function logOpenIDCallbackFailure({
   logger,
   req,
@@ -75,18 +93,18 @@ export function logOpenIDCallbackFailure({
   info,
   level = 'warn',
 }: LogOpenIDCallbackFailureOptions): void {
-  logger[level](
+  const details = buildOAuthFailureLog({
+    provider: 'openid',
+    req,
+    err,
+    info,
+    defaultMessage: 'OpenID authentication failed',
+  });
+  const prefix =
     level === 'error'
       ? '[OpenID OAuth] Callback authentication error'
-      : '[OpenID OAuth] Callback authentication failed',
-    buildOAuthFailureLog({
-      provider: 'openid',
-      req,
-      err,
-      info,
-      defaultMessage: 'OpenID authentication failed',
-    }),
-  );
+      : '[OpenID OAuth] Callback authentication failed';
+  logger[level](`${prefix}${describeProviderRejection(details)}`, details);
 }
 
 export function createOpenIDCallbackAuthenticator({
