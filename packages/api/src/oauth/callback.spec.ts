@@ -118,7 +118,8 @@ describe('OpenID OAuth callback helpers', () => {
     const req = createRequest({
       query: {
         error: 'consent_required',
-        error_description: 'AADSTS65001: The user or administrator has not consented to use the application.',
+        error_description:
+          'AADSTS65001: The user or administrator has not consented to use the application.',
       },
     });
 
