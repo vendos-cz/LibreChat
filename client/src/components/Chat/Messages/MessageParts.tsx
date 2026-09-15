@@ -10,9 +10,11 @@ import {
 } from '~/utils';
 import { useMessageHelpers, useLocalize, useAttachments, useContentMetadata } from '~/hooks';
 import AuthorHeader from '~/components/Chat/Messages/Content/Parts/AuthorHeader';
+import { getHeaderModelName } from '~/components/Chat/Messages/ui/HeaderLabel';
 import { revealOnRowHoverClasses, messageFooterClasses } from './styles';
 import MessageRow from '~/components/Chat/Messages/ui/MessageRow';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
+import Elapsed, { shouldShowElapsed } from './Elapsed';
 import ContentParts from './Content/ContentParts';
 import SiblingSwitch from './SiblingSwitch';
 import HoverButtons from './HoverButtons';
@@ -39,6 +41,7 @@ function MessageParts(props: TMessageProps) {
     latestMessageId,
     handleContinue,
     copyToClipboard,
+    getCanCopy,
     regenerateMessage,
   } = useMessageHelpers(props);
 
@@ -101,11 +104,17 @@ function MessageParts(props: TMessageProps) {
       onWheel={handleScroll}
       onTouchMove={handleScroll}
     >
-      <div className="m-auto justify-center px-4 py-3 md:px-6">
+      <div className="m-auto justify-center px-4 py-3 sm:px-0">
         <MessageRow
           id={messageId ?? ''}
           icon={<MessageIcon iconData={iconData} assistant={assistant} agent={agent} />}
           label={name}
+          hoverLabel={getHeaderModelName(
+            agent?.model,
+            assistant?.model,
+            message.model,
+            conversation?.model,
+          )}
           timestamp={message.createdAt ?? message.clientTimestamp}
           ariaLabel={getMessageAriaLabel(message, localize)}
           headerPrefix={getHeaderPrefixForScreenReader(message, localize)}
@@ -126,6 +135,13 @@ function MessageParts(props: TMessageProps) {
                   isSubmitting && messageId === latestMessageId && revealOnRowHoverClasses,
                 )}
               />
+              {shouldShowElapsed({
+                isSubmitting,
+                isLatestMessage: messageId === latestMessageId,
+                isCreatedByUser,
+                siblingIdx,
+                siblingCount,
+              }) && <Elapsed index={index} />}
               <HoverButtons
                 index={index}
                 isEditing={edit}
@@ -135,6 +151,7 @@ function MessageParts(props: TMessageProps) {
                 conversation={conversation ?? null}
                 regenerate={() => regenerateMessage()}
                 copyToClipboard={copyToClipboard}
+                getCanCopy={getCanCopy}
                 handleContinue={handleContinue}
                 latestMessageId={latestMessageId}
                 isLast={isLast}

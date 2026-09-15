@@ -787,7 +787,9 @@ export type ListAlwaysApplySkillsResult = {
     name: string;
     body: string;
     author: Types.ObjectId;
+    frontmatter?: Record<string, unknown>;
     allowedTools?: string[];
+    version: number;
   }>;
   /** `true` when another page exists beyond this one. */
   has_more: boolean;
@@ -1418,7 +1420,7 @@ export function createSkillMethods(
     const rows = await Skill.find(filter)
       .sort({ updatedAt: -1, _id: 1 })
       .limit(limit + 1)
-      .select('name body author updatedAt allowedTools')
+      .select('name body author frontmatter updatedAt allowedTools version')
       .lean();
 
     const has_more = rows.length > limit;
@@ -1447,6 +1449,8 @@ export function createSkillMethods(
         name: row.name,
         body: row.body ?? '',
         author: row.author as Types.ObjectId,
+        version: row.version,
+        frontmatter: row.frontmatter,
       };
       if (row.allowedTools !== undefined) {
         result.allowedTools = row.allowedTools;
@@ -1827,7 +1831,7 @@ export function createSkillMethods(
           author: row.author,
           tenantId: row.tenantId,
         },
-        $unset: { content: '', isBinary: '', codeEnvRef: '' },
+        $unset: { content: '', isBinary: '', codeEnvRef: '', codeEnvRefs: '' },
       },
       { new: true, upsert: true, includeResultMetadata: true },
     ).lean()) as unknown as SkillFileUpsertResult;
@@ -1883,12 +1887,20 @@ export function createSkillMethods(
   ): Promise<{ matchedCount: number; modifiedCount: number }> {
     if (updates.length === 0) return { matchedCount: 0, modifiedCount: 0 };
     const SkillFile = mongoose.models.SkillFile as Model<ISkillFileDocument>;
-    const ops = updates.map((u) => ({
-      updateOne: {
-        filter: { skillId: u.skillId, relativePath: u.relativePath },
-        update: { $set: { codeEnvRef: u.codeEnvRef } },
-      },
-    }));
+    const ops = updates.map((u) => {
+      const routeKey = u.codeEnvRef.executionRouteKey ?? u.codeEnvRef.executionProfile ?? 'default';
+      return {
+        updateOne: {
+          filter: { skillId: u.skillId, relativePath: u.relativePath },
+          update: {
+            $set: {
+              codeEnvRef: u.codeEnvRef,
+              [`codeEnvRefs.${routeKey}`]: u.codeEnvRef,
+            },
+          },
+        },
+      };
+    });
 
     /**
      * The returned `{matchedCount, modifiedCount}` lets callers warn on

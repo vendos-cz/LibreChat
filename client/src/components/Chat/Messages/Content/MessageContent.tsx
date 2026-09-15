@@ -1,11 +1,15 @@
 import { memo, Suspense, useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
+import { Constants } from 'librechat-data-provider';
 import { Alert, DelayedRender } from '@librechat/client';
 import type { TMessage } from 'librechat-data-provider';
 import type { TMessageContentProps, TDisplayProps } from '~/common';
 import useSmoothStreaming from '~/hooks/Messages/useSmoothStreaming';
 import Error from '~/components/Messages/Content/Error';
+import ToolCallLimitNotice from './ToolCallLimitNotice';
+import CollapsibleText from './Parts/CollapsibleText';
 import { useMessageContext } from '~/Providers';
+import EmptyText from './Parts/EmptyText';
 import MarkdownLite from './MarkdownLite';
 import EditMessage from './EditMessage';
 import Thinking from './Parts/Thinking';
@@ -28,14 +32,8 @@ const parseThinkingContent = (text: string) => {
 };
 
 const LoadingFallback = () => (
-  <div className="text-message mb-[0.625rem] flex min-h-[20px] flex-col items-start gap-3 overflow-visible">
-    <div className="markdown prose dark:prose-invert light w-full break-words">
-      <div className="absolute">
-        <p className="submitting relative">
-          <span className="result-thinking" />
-        </p>
-      </div>
-    </div>
+  <div className="mb-[0.625rem]">
+    <EmptyText underHeaderIcon />
   </div>
 );
 
@@ -95,6 +93,7 @@ export const ErrorMessage = ({
 const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: TDisplayProps) => {
   const { isSubmitting = false, isLatestMessage = false } = useMessageContext();
   const enableUserMsgMarkdown = useRecoilValue(store.enableUserMsgMarkdown);
+  const collapseLongUserMessages = useRecoilValue(store.collapseLongUserMessages);
   const smoothStreaming = useSmoothStreaming();
 
   // The word fade itself indicates streaming, so the trailing block cursor
@@ -116,27 +115,38 @@ const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: TDisplay
 
   return (
     <Container message={message}>
-      <div
-        className={cn(
-          'markdown prose message-content dark:prose-invert light w-full break-words',
-          isSubmitting && 'submitting',
-          showCursorState && text.length > 0 && 'result-streaming',
-          isCreatedByUser && !enableUserMsgMarkdown && 'whitespace-pre-wrap',
-          'text-text-primary',
-        )}
-      >
-        {content}
-      </div>
+      <CollapsibleText enabled={isCreatedByUser && collapseLongUserMessages}>
+        <div
+          className={cn(
+            'markdown prose message-content dark:prose-invert light w-full break-words',
+            isSubmitting && 'submitting',
+            showCursorState && text.length > 0 && 'result-streaming',
+            isCreatedByUser && !enableUserMsgMarkdown && 'whitespace-pre-wrap',
+            'text-text-primary',
+          )}
+        >
+          {content}
+        </div>
+      </CollapsibleText>
     </Container>
   );
 };
 
-export const UnfinishedMessage = ({ message }: { message: TMessage }) => (
-  <ErrorMessage
-    message={message}
-    text="The response is incomplete; it's either still processing, was cancelled, or censored. Refresh or try a different prompt."
-  />
-);
+export const UnfinishedMessage = ({ message }: { message: TMessage }) => {
+  const localize = useLocalize();
+
+  /** Ran out of steps, not broken: a distinct, actionable card rather than the
+   *  generic "something went wrong, try again" warning. */
+  if (message.finish_reason === Constants.TOOL_CALL_LIMIT_FINISH_REASON) {
+    return (
+      <Container message={message}>
+        <ToolCallLimitNotice message={message} />
+      </Container>
+    );
+  }
+
+  return <ErrorMessage message={message} text={localize('com_ui_response_incomplete')} />;
+};
 
 const MessageContent = ({
   text,

@@ -4,7 +4,8 @@ import { Permissions, PermissionTypes } from 'librechat-data-provider';
 import { CallToolResultSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { TokenMethods, IUser } from '@librechat/data-schemas';
-import type { OboTokenResolver, OboTrustChecker } from '~/mcp/oauth/obo';
+import type { OboTokenResolver, OboTrustChecker, UpstreamTokenProvider } from '~/mcp/oauth/obo';
+import type { AuthIdentityContext } from '~/utils/identity';
 import type { GraphTokenResolver } from '~/utils/graph';
 import type { FlowStateManager } from '~/flow/manager';
 import type { MCPOAuthTokens } from './oauth';
@@ -12,6 +13,7 @@ import type { RequestBody } from '~/types';
 import type * as t from './types';
 import {
   getMissingRuntimeBodyPlaceholderFields,
+  createDeadlineAbortSignal,
   canUseAppConnection,
   isOAuthServer,
   isUserSourced,
@@ -31,6 +33,7 @@ import { MCPConnectionFactory } from './MCPConnectionFactory';
 import { processMCPEnv, isPluginSourced } from '~/utils/env';
 import { OAuthLifecycleRelay } from './oauth/pending';
 import { preProcessGraphTokens } from '~/utils/graph';
+import { isAbortError } from '~/utils/errors';
 import { formatToolContent } from './parsers';
 import { MCPConnection } from './connection';
 import { mcpConfig } from './mcpConfig';
@@ -46,6 +49,8 @@ function createOboToolCallErrorMessage(
     failureSuffix = 'Please retry.';
   } else if (error.reason === 'exchange_failed') {
     failureSuffix = 'Re-authenticate the user or verify the configured OBO scopes and retry.';
+  } else if (error.reason === 'session_refresh_failed') {
+    failureSuffix = 'Please sign in again.';
   }
 
   return `${logPrefix} ${error.userMessage} Cannot execute tool ${toolName}. ${failureSuffix}`;
@@ -261,12 +266,33 @@ export class MCPManager extends UserConnectionManager {
    */
   public async discoverServerTools(args: t.ToolDiscoveryOptions): Promise<t.ToolDiscoveryResult> {
     const { serverName, user } = args;
-    const logPrefix = user?.id ? `[MCP][User: ${user.id}][${serverName}]` : `[MCP][${serverName}]`;
+    const registry = MCPServersRegistry.getInstance();
+    const serverConfig = await registry.getServerConfig(serverName, user?.id, args.configServers);
+
+    if (!serverConfig) {
+      logger.warn('[MCP][Discovery] Server configuration not found');
+      return { tools: null, oauthRequired: false, oauthUrl: null };
+    }
 
     try {
-      const existingAppConnection = await this.appConnections?.get(serverName);
-      if (existingAppConnection && (await existingAppConnection.isConnected())) {
-        const snapshot = await existingAppConnection.fetchOrderedToolsSnapshot();
+      const useAppConnection =
+        canUseAppConnection(serverConfig) &&
+        (await registry.isAppServerConfig(serverName, serverConfig));
+      const existingAppConnection = useAppConnection
+        ? await this.appConnections?.get(serverName)
+        : null;
+      /** Cancels the shared connection's health probe and `tools/list` for THIS caller only —
+       *  an aborted probe reports false without touching the shared connection's state. Combines
+       *  the budget with the caller's own signal so cancelling the request also stops the work. */
+      const budgetSignal =
+        existingAppConnection != null
+          ? createDeadlineAbortSignal(args.deadlineMs, args.signal)
+          : undefined;
+      if (existingAppConnection && (await existingAppConnection.isConnected(budgetSignal))) {
+        const snapshot = await existingAppConnection.fetchOrderedToolsSnapshot(
+          args.deadlineMs,
+          budgetSignal,
+        );
         return {
           tools: snapshot.complete ? snapshot.tools : null,
           oauthRequired: false,
@@ -274,17 +300,19 @@ export class MCPManager extends UserConnectionManager {
         };
       }
     } catch {
-      logger.debug(`${logPrefix} [Discovery] App connection not available, trying discovery mode`);
+      logger.debug('[MCP][Discovery] App connection unavailable; trying discovery mode');
     }
 
-    const serverConfig = await MCPServersRegistry.getInstance().getServerConfig(
-      serverName,
-      user?.id,
-      args.configServers,
-    );
-
-    if (!serverConfig) {
-      logger.warn(`${logPrefix} [Discovery] Server config not found`);
+    /** A probe aborted by the caller is not a dead server: falling through here would open a
+     *  fresh connection on behalf of a request that no longer exists (or a budget already
+     *  spent), and the fallback keeps running after the caller has gone. */
+    if (
+      args.signal?.aborted === true ||
+      (args.deadlineMs != null && Date.now() >= args.deadlineMs)
+    ) {
+      logger.debug(
+        '[MCP][Discovery] Caller cancelled or budget spent; skipping discovery fallback',
+      );
       return { tools: null, oauthRequired: false, oauthUrl: null };
     }
 
@@ -293,13 +321,12 @@ export class MCPManager extends UserConnectionManager {
       args.requestBody,
     );
     if (missingBodyFields.length > 0) {
-      logger.warn(
-        `${logPrefix} [Discovery] Request body field(s) required to resolve runtime MCP placeholders: ${missingBodyFields.join(', ')}`,
-      );
+      logger.warn('[MCP][Discovery] Runtime request fields are missing', {
+        missingBodyFieldCount: missingBodyFields.length,
+      });
       return { tools: null, oauthRequired: false, oauthUrl: null };
     }
 
-    const registry = MCPServersRegistry.getInstance();
     const { allowedDomains, allowedAddresses, useSSRFProtection } =
       await registry.resolveAllowlists({ userId: user?.id, role: user?.role });
     await this.assertResolvedRuntimeConfigAllowed({
@@ -310,7 +337,7 @@ export class MCPManager extends UserConnectionManager {
       graphTokenResolver: args.graphTokenResolver,
       allowedDomains,
       allowedAddresses,
-      logPrefix: `${logPrefix} [Discovery]`,
+      logPrefix: '[MCP][Discovery]',
     });
 
     const useOAuth = requiresOAuthMachinery(serverConfig);
@@ -330,8 +357,8 @@ export class MCPManager extends UserConnectionManager {
       if (result.connection) {
         try {
           await result.connection.dispose();
-        } catch (error) {
-          logger.warn(`${logPrefix} [Discovery] Failed to dispose discovery connection`, error);
+        } catch {
+          logger.warn('[MCP][Discovery] Failed to dispose discovery connection');
         }
       }
       return {
@@ -348,12 +375,14 @@ export class MCPManager extends UserConnectionManager {
         requestBody: args.requestBody,
         graphTokenResolver: args.graphTokenResolver,
         connectionTimeout: args.connectionTimeout,
+        deadlineMs: args.deadlineMs,
+        signal: args.signal,
       });
       return finalizeDiscoveryResult(result);
     }
 
     if (!user || !args.flowManager) {
-      logger.warn(`${logPrefix} [Discovery] OAuth server requires user and flowManager`);
+      logger.warn('[MCP][Discovery] OAuth server requires a user and flow manager');
       return { tools: null, oauthRequired: true, oauthUrl: null };
     }
 
@@ -368,8 +397,11 @@ export class MCPManager extends UserConnectionManager {
       requestBody: args.requestBody,
       graphTokenResolver: args.graphTokenResolver,
       connectionTimeout: args.connectionTimeout,
+      deadlineMs: args.deadlineMs,
       oboTokenResolver: args.oboTokenResolver,
       oboTrustChecker: args.oboTrustChecker,
+      upstreamTokenProvider: args.upstreamTokenProvider,
+      oboIdentityContext: args.oboIdentityContext,
     });
 
     return finalizeDiscoveryResult(result);
@@ -419,11 +451,18 @@ export class MCPManager extends UserConnectionManager {
     userId: string,
     serverName: string,
     serverConfig?: t.ParsedServerConfig,
+    options?: { deadlineMs?: number; signal?: AbortSignal },
   ): Promise<{
     tools: t.LCAvailableTools | null;
     publicationGeneration?: string;
+    publicationRevision?: string;
   }> {
     try {
+      const signal = createDeadlineAbortSignal(options?.deadlineMs, options?.signal);
+      const readToolCatalog = (connection: MCPConnection) =>
+        options == null
+          ? MCPServerInspector.getToolCatalog(serverName, connection)
+          : MCPServerInspector.getToolCatalog(serverName, connection, options.deadlineMs, signal);
       const registry = MCPServersRegistry.getInstance();
       const effectiveConfig = serverConfig ?? (await registry.getServerConfig(serverName, userId));
       const useAppConnection =
@@ -434,9 +473,7 @@ export class MCPManager extends UserConnectionManager {
         ? await this.appConnections?.get(serverName)
         : null;
       if (existingAppConnection != null) {
-        return {
-          tools: await MCPServerInspector.getToolFunctions(serverName, existingAppConnection),
-        };
+        return readToolCatalog(existingAppConnection);
       }
 
       let awaitedRecovery: Promise<void> | undefined;
@@ -477,12 +514,12 @@ export class MCPManager extends UserConnectionManager {
         if (recovery && recovery !== awaitedRecovery) {
           awaitedRecovery = recovery;
           await this.releaseConnection(connection);
-          await this.waitForConnectionRecovery(recovery);
+          await this.waitForConnectionRecovery(recovery, signal);
           continue;
         }
 
         try {
-          const tools = await MCPServerInspector.getToolFunctions(serverName, connection);
+          const { tools } = await readToolCatalog(connection);
           const generationAfterFetch = await getMCPToolsChangedGeneration({ userId, serverName });
           if (
             publicationGeneration != null &&
@@ -790,6 +827,8 @@ Please follow these instructions when using tools from the respective MCP server
     graphTokenResolver,
     oboTokenResolver,
     oboTrustChecker,
+    upstreamTokenProvider,
+    oboIdentityContext,
   }: {
     user?: IUser;
     serverName: string;
@@ -809,6 +848,8 @@ Please follow these instructions when using tools from the respective MCP server
     graphTokenResolver?: GraphTokenResolver;
     oboTokenResolver?: OboTokenResolver;
     oboTrustChecker?: OboTrustChecker;
+    upstreamTokenProvider?: UpstreamTokenProvider;
+    oboIdentityContext?: AuthIdentityContext;
   }): Promise<t.FormattedToolResponse> {
     const userId = user?.id;
     const logPrefix = userId ? `[MCP][User: ${userId}][${serverName}]` : `[MCP][${serverName}]`;
@@ -868,6 +909,8 @@ Please follow these instructions when using tools from the respective MCP server
             oauthEnd,
             oboTokenResolver,
             oboTrustChecker,
+            upstreamTokenProvider,
+            oboIdentityContext,
             graphTokenResolver,
             signal: options?.signal,
             customUserVars,
@@ -957,9 +1000,17 @@ Please follow these instructions when using tools from the respective MCP server
         const resolvedHeaders: Record<string, string> =
           'headers' in currentOptions ? { ...(currentOptions.headers || {}) } : {};
 
-        /** Refresh OBO token on each tool call to ensure it's current */
+        /** Resolve the current OBO token for this tool call; the resolver may serve cached tokens. */
         const oboConfig = rawConfig.obo;
         if (oboConfig && oboTokenResolver && user) {
+          if (!upstreamTokenProvider) {
+            throw new McpError(
+              ErrorCode.InternalError,
+              `${logPrefix} Internal: upstreamTokenProvider not plumbed for OBO tool call. ` +
+                'OBO requires a live upstream-token closure; the caller must construct one via ' +
+                'createOpenIDSessionTokenProvider() and forward it through callTool().',
+            );
+          }
           const oboTrusted = oboTrustChecker
             ? await oboTrustChecker({
                 source: rawConfig.source,
@@ -978,7 +1029,13 @@ Please follow these instructions when using tools from the respective MCP server
           }
           let oboTokens: MCPOAuthTokens;
           try {
-            oboTokens = await resolveOboToken(user, oboConfig, oboTokenResolver);
+            oboTokens = await resolveOboToken(
+              user,
+              oboConfig,
+              oboTokenResolver,
+              upstreamTokenProvider,
+              oboIdentityContext,
+            );
           } catch (error) {
             if (error instanceof OboTokenResolutionError) {
               throw new McpError(
@@ -1140,6 +1197,14 @@ Please follow these instructions when using tools from the respective MCP server
         if (error instanceof OAuthRecoveryTakeoverRequired) {
           recoveryTakeoverConsumed = true;
           continue;
+        }
+        /** A user Stop aborts the in-flight request; that rejection is the
+         *  cancellation working, not a fault, so it stays out of the error log.
+         *  The error must look like an abort too — a real failure can reject in
+         *  the same tick as the Stop and has to stay visible. */
+        if (options?.signal?.aborted === true && isAbortError(error)) {
+          logger.debug(`${logPrefix}[${toolName}] Tool call cancelled by user abort`);
+          throw error;
         }
         // Log with context and re-throw or handle as needed
         logger.error(`${logPrefix}[${toolName}] Tool call failed`, error);

@@ -12,6 +12,8 @@ export const darkTheme: IThemeRGB = {
   'rgb-text-tertiary': '153 150 150', // #999696 (gray-400)
   'rgb-text-warning': '245 158 11', // #f59e0b (amber-500)
   'rgb-text-destructive': '248 113 113', // #f87171 (red-400)
+  'rgb-shimmer-base': '255 255 255', // #ffffff, carried at 0.8 alpha
+  'rgb-shimmer-dip': '179 179 179', // #b3b3b3
 
   // Link and accent colors
   'rgb-link': '96 165 250', // #60a5fa (blue-400)
@@ -87,6 +89,16 @@ export const darkTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '171 104 255', // #ab68ff
+
+  /** Categorical series scale — the same seven hues stepped for the #212121
+   *  surface: worst adjacent CVD ΔE 13.0, normal-vision ΔE 19.0, all ≥ 3:1. */
+  'rgb-series-1': '9 140 238', // #098cee (cerulean)
+  'rgb-series-2': '217 87 35', // #d95723 (orange)
+  'rgb-series-3': '6 158 152', // #069e98 (aqua)
+  'rgb-series-4': '200 133 12', // #c8850c (amber)
+  'rgb-series-5': '213 82 130', // #d55282 (magenta)
+  'rgb-series-6': '171 104 254', // #ab68fe (violet)
+  'rgb-series-7': '80 167 49', // #50a731 (green)
 
   // Presentation
   'rgb-presentation': '33 33 33', // #212121 (gray-800)
